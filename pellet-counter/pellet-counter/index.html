@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Pellets">
+  <meta name="theme-color" content="#0e0e0e">
+  <title>Pellet Counter</title>
+  <link rel="manifest" href="manifest.json">
+  <link rel="icon" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <style>
+    :root {
+      --bg:        #0e0e0e;
+      --surface:   #1a1a1a;
+      --surface2:  #242424;
+      --border:    rgba(255,255,255,0.08);
+      --border2:   rgba(255,255,255,0.14);
+      --text:      #f0efeb;
+      --muted:     #888884;
+      --hint:      #555552;
+      --blue:      #4a9eff;
+      --blue-dim:  #1a3a5c;
+      --green:     #3ecf8e;
+      --green-dim: #0e3a26;
+      --orange:    #f97316;
+      --orange-dim:#3a1a06;
+      --radius:    10px;
+      --radius-lg: 14px;
+      --safe-top:  env(safe-area-inset-top, 0px);
+      --safe-bot:  env(safe-area-inset-bottom, 0px);
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+    html, body { height: 100%; background: var(--bg); color: var(--text); font-family: -apple-system, 'Segoe UI', sans-serif; font-size: 15px; overscroll-behavior: none; }
+
+    /* ── layout ── */
+    .shell { display: flex; flex-direction: column; height: 100dvh; }
+    .topbar {
+      padding: calc(var(--safe-top) + 14px) 16px 14px;
+      border-bottom: 0.5px solid var(--border);
+      background: var(--bg);
+      display: flex; align-items: center; justify-content: space-between;
+      position: sticky; top: 0; z-index: 10;
+    }
+    .topbar-left { display: flex; align-items: center; gap: 10px; }
+    .app-icon { width: 30px; height: 30px; background: var(--blue-dim); border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 16px; }
+    .topbar h1 { font-size: 16px; font-weight: 600; letter-spacing: -0.3px; }
+    .scale-badge { font-size: 11px; padding: 3px 8px; border-radius: 6px; background: var(--green-dim); color: var(--green); font-weight: 500; display: none; }
+
+    /* ── tabs ── */
+    .tabs { display: flex; border-bottom: 0.5px solid var(--border); }
+    .tab {
+      flex: 1; padding: 12px 0; text-align: center; font-size: 13px; font-weight: 500;
+      color: var(--muted); background: none; border: none; cursor: pointer;
+      border-bottom: 2px solid transparent; transition: color 0.15s;
+    }
+    .tab.active { color: var(--text); border-bottom-color: var(--blue); }
+
+    /* ── scroll area ── */
+    .content { flex: 1; overflow-y: auto; padding: 16px 16px calc(var(--safe-bot) + 16px); }
+    .panel { display: none; }
+    .panel.active { display: block; }
+
+    /* ── upload zone ── */
+    .upload-zone {
+      border: 1.5px dashed var(--border2); border-radius: var(--radius-lg);
+      padding: 28px 16px; text-align: center; cursor: pointer;
+      background: var(--surface); margin-bottom: 14px; transition: background 0.15s;
+    }
+    .upload-zone:active { background: var(--surface2); }
+    .upload-zone input { display: none; }
+    .upload-zone .uz-icon { font-size: 32px; margin-bottom: 8px; }
+    .upload-zone p { font-size: 14px; color: var(--text); margin-bottom: 4px; }
+    .upload-zone span { font-size: 12px; color: var(--muted); }
+
+    /* ── params ── */
+    .params-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px; }
+    .param-card { background: var(--surface); border: 0.5px solid var(--border); border-radius: var(--radius); padding: 10px; }
+    .param-card label { font-size: 11px; color: var(--muted); display: block; margin-bottom: 6px; }
+    .param-card input[type=range] { width: 100%; accent-color: var(--blue); }
+    .param-card .val { font-size: 13px; font-weight: 600; color: var(--text); text-align: right; display: block; margin-top: 4px; }
+
+    /* ── legend ── */
+    .legend { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 14px; }
+    .legend-item { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--muted); }
+    .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+
+    /* ── status ── */
+    .status-bar { font-size: 12px; color: var(--muted); padding: 8px 12px; background: var(--surface); border-radius: var(--radius); margin-bottom: 12px; display: none; line-height: 1.5; }
+
+    /* ── canvas ── */
+    .canvas-wrap { display: none; margin-bottom: 14px; border-radius: var(--radius-lg); overflow: hidden; border: 0.5px solid var(--border); }
+    .canvas-wrap canvas { width: 100%; height: auto; display: block; cursor: crosshair; }
+
+    /* ── resultados ── */
+    .results-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 14px; }
+    .metric { background: var(--surface); border-radius: var(--radius); padding: 12px 8px; text-align: center; border: 0.5px solid var(--border); }
+    .metric .m-label { font-size: 10px; color: var(--muted); margin-bottom: 4px; font-weight: 500; }
+    .metric .m-value { font-size: 22px; font-weight: 700; color: var(--text); line-height: 1; }
+    .metric .m-sub { font-size: 10px; color: var(--hint); margin-top: 3px; }
+    .metric.m-blue .m-label { color: var(--blue); }
+    .metric.m-green .m-label { color: var(--green); }
+    .metric.m-orange .m-label { color: var(--orange); }
+    .metric.m-total .m-value { color: var(--green); }
+
+    /* ── export box ── */
+    .export-box { background: var(--surface); border: 0.5px solid var(--border); border-radius: var(--radius-lg); padding: 14px; margin-bottom: 14px; display: none; }
+    .section-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 8px; }
+    .export-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px; }
+    .export-fields > div label { font-size: 11px; color: var(--muted); display: block; margin-bottom: 4px; }
+    .export-fields > div input {
+      width: 100%; background: var(--surface2); border: 0.5px solid var(--border2);
+      border-radius: 8px; color: var(--text); font-size: 13px; padding: 8px 10px;
+    }
+    .odoo-block {
+      background: var(--surface2); border-radius: var(--radius); padding: 12px;
+      font-family: 'SF Mono', 'Fira Code', monospace; font-size: 11px; line-height: 1.8;
+      color: var(--text); white-space: pre-wrap; margin-bottom: 10px;
+      border: 0.5px solid var(--border);
+    }
+    .copied-msg { font-size: 12px; color: var(--green); display: none; margin-left: 8px; }
+
+    /* ── botones ── */
+    .btn-row { display: flex; gap: 8px; flex-wrap: wrap; }
+    button {
+      background: var(--surface2); border: 0.5px solid var(--border2);
+      border-radius: var(--radius); color: var(--text); font-size: 13px;
+      padding: 10px 16px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px;
+      font-weight: 500; transition: background 0.1s;
+    }
+    button:active { background: var(--surface); }
+    button.btn-primary { background: var(--blue-dim); border-color: var(--blue); color: var(--blue); }
+
+    /* ── calibración pasos ── */
+    .steps { margin-bottom: 16px; }
+    .step { display: flex; gap: 12px; margin-bottom: 12px; align-items: flex-start; }
+    .step-num {
+      width: 24px; height: 24px; border-radius: 50%; background: var(--surface2);
+      border: 0.5px solid var(--border2); font-size: 12px; font-weight: 600;
+      display: flex; align-items: center; justify-content: center; flex-shrink: 0; color: var(--blue);
+    }
+    .step p { font-size: 13px; color: var(--muted); line-height: 1.6; margin: 0; }
+    .step p strong { color: var(--text); }
+    .coin-select { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+    .coin-btn {
+      padding: 7px 13px; font-size: 12px; border-radius: var(--radius);
+      border: 0.5px solid var(--border2); background: var(--surface);
+      color: var(--muted); cursor: pointer; font-weight: 500;
+    }
+    .coin-btn.selected { border-color: var(--blue); color: var(--blue); background: var(--blue-dim); }
+    .input-row { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
+    .input-row label { font-size: 13px; color: var(--muted); }
+    .input-row input {
+      width: 80px; background: var(--surface2); border: 0.5px solid var(--border2);
+      border-radius: 8px; color: var(--text); font-size: 13px; padding: 7px 10px;
+    }
+    .calib-info { background: var(--green-dim); border: 0.5px solid rgba(62,207,142,0.2); border-radius: var(--radius); padding: 10px 12px; margin-bottom: 12px; font-size: 12px; color: var(--green); display: none; line-height: 1.6; }
+
+    /* ── install banner ── */
+    #installBanner {
+      position: fixed; bottom: calc(var(--safe-bot) + 12px); left: 12px; right: 12px;
+      background: var(--surface2); border: 0.5px solid var(--border2); border-radius: var(--radius-lg);
+      padding: 14px 16px; display: none; align-items: center; justify-content: space-between;
+      gap: 12px; z-index: 100; box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+    }
+    #installBanner p { font-size: 13px; color: var(--text); }
+    #installBanner span { font-size: 12px; color: var(--muted); }
+    #cv-status { font-size: 12px; color: var(--muted); padding: 8px 12px; text-align: center; }
+  </style>
+</head>
+<body>
+<div class="shell">
+
+  <!-- topbar -->
+  <div class="topbar">
+    <div class="topbar-left">
+      <div class="app-icon">⬤</div>
+      <h1>Pellet Counter</h1>
+    </div>
+    <span class="scale-badge" id="scaleBadge"></span>
+  </div>
+
+  <!-- tabs -->
+  <div class="tabs">
+    <button class="tab active" data-tab="count" onclick="switchTab('count')">📷 Contar</button>
+    <button class="tab"        data-tab="calib" onclick="switchTab('calib')">📐 Calibrar</button>
+  </div>
+
+  <div id="cv-status">Listo</div>
+
+  <!-- contenido -->
+  <div class="content">
+
+    <!-- ── PANEL CONTAR ── -->
+    <div class="panel active" id="panel-count">
+
+      <div class="upload-zone" onclick="document.getElementById('fileCount').click()">
+        <input type="file" id="fileCount" accept="image/*" capture="environment" onchange="loadCount(event)">
+        <div class="uz-icon">📸</div>
+        <p>Fotografiar o subir imagen</p>
+        <span>Bandeja negra mate · luz cenital</span>
+      </div>
+
+      <div class="params-grid">
+        <div class="param-card">
+          <label>Sensibilidad</label>
+          <input type="range" id="p1" min="10" max="80" value="35" step="1" oninput="document.getElementById('v1').textContent=this.value; rerun()">
+          <span class="val" id="v1">35</span>
+        </div>
+        <div class="param-card">
+          <label>Radio mín (px)</label>
+          <input type="range" id="p2" min="3" max="50" value="8" step="1" oninput="document.getElementById('v2').textContent=this.value; rerun()">
+          <span class="val" id="v2">8</span>
+        </div>
+        <div class="param-card">
+          <label>Radio máx (px)</label>
+          <input type="range" id="p3" min="20" max="200" value="90" step="1" oninput="document.getElementById('v3').textContent=this.value; rerun()">
+          <span class="val" id="v3">90</span>
+        </div>
+        <div class="param-card">
+          <label>Separación (px)</label>
+          <input type="range" id="p4" min="5" max="100" value="20" step="1" oninput="document.getElementById('v4').textContent=this.value; rerun()">
+          <span class="val" id="v4">20</span>
+        </div>
+      </div>
+
+      <div class="calib-info" id="calibInfo"></div>
+
+      <div class="legend">
+        <span class="legend-item"><span class="dot" style="background:#4a9eff"></span>4 mm</span>
+        <span class="legend-item"><span class="dot" style="background:#3ecf8e"></span>8 mm</span>
+        <span class="legend-item"><span class="dot" style="background:#f97316"></span>12 mm</span>
+        <span class="legend-item"><span class="dot" style="background:#555552"></span>fuera de rango</span>
+      </div>
+
+      <div class="status-bar" id="statusCount"></div>
+      <div class="canvas-wrap" id="wrapCount"><canvas id="cvCount"></canvas></div>
+
+      <div id="resultsCount" style="display:none">
+        <div class="results-grid">
+          <div class="metric m-blue">
+            <div class="m-label">4 mm</div>
+            <div class="m-value" id="c4">0</div>
+            <div class="m-sub">pequeño</div>
+          </div>
+          <div class="metric m-green">
+            <div class="m-label">8 mm</div>
+            <div class="m-value" id="c8">0</div>
+            <div class="m-sub">mediano</div>
+          </div>
+          <div class="metric m-orange">
+            <div class="m-label">12 mm</div>
+            <div class="m-value" id="c12">0</div>
+            <div class="m-sub">grande</div>
+          </div>
+          <div class="metric m-total">
+            <div class="m-label">Total</div>
+            <div class="m-value" id="cT">0</div>
+            <div class="m-sub">todas</div>
+          </div>
+        </div>
+
+        <!-- export -->
+        <div class="export-box" id="exportBox">
+          <p class="section-label">Exportar a Odoo</p>
+          <div class="export-fields">
+            <div><label>Proveedor</label><input type="text" id="exProveedor" placeholder="Nombre" oninput="buildOdoo()"></div>
+            <div><label>Nº PO</label><input type="text" id="exPO" placeholder="PO-2026-XXX" oninput="buildOdoo()"></div>
+            <div><label>Prefijo lote</label><input type="text" id="exLote" placeholder="P-2026" oninput="buildOdoo()"></div>
+            <div><label>Ubicación</label><input type="text" id="exUbic" placeholder="WH/Stock" oninput="buildOdoo()"></div>
+          </div>
+          <p class="section-label">Vista previa</p>
+          <div class="odoo-block" id="odooBlock">—</div>
+          <div class="btn-row">
+            <button class="btn-primary" onclick="copyOdoo()">📋 Copiar</button>
+            <span class="copied-msg" id="copiedMsg">✓ Copiado</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="btn-row" style="margin-top:10px">
+        <button id="btnRecount" style="display:none" onclick="runCount()">↺ Analizar de nuevo</button>
+      </div>
+    </div>
+
+    <!-- ── PANEL CALIBRAR ── -->
+    <div class="panel" id="panel-calib">
+      <div class="steps">
+        <div class="step"><div class="step-num">1</div><p>Pon una moneda de referencia junto a los pellets (o en foto separada a la misma altura de cámara).</p></div>
+        <div class="step"><div class="step-num">2</div><p>Sube la foto y <strong>toca sobre la moneda</strong> en la imagen.</p></div>
+        <div class="step"><div class="step-num">3</div><p>La app calcula <strong>px/mm</strong> y fija los umbrales. La calibración se guarda automáticamente.</p></div>
+      </div>
+
+      <div class="upload-zone" onclick="document.getElementById('fileCalib').click()">
+        <input type="file" id="fileCalib" accept="image/*" capture="environment" onchange="loadCalib(event)">
+        <div class="uz-icon">🔍</div>
+        <p>Foto con moneda de referencia</p>
+        <span>Plana · bien iluminada</span>
+      </div>
+
+      <p class="section-label">Moneda de referencia</p>
+      <div class="coin-select">
+        <button class="coin-btn selected" onclick="selectCoin(this, 23.25)">1 € · 23.25mm</button>
+        <button class="coin-btn" onclick="selectCoin(this, 25.75)">2 € · 25.75mm</button>
+        <button class="coin-btn" onclick="selectCoin(this, 21.25)">50ct · 21.25mm</button>
+        <button class="coin-btn" onclick="selectCoin(this, 19.75)">10ct · 19.75mm</button>
+      </div>
+
+      <div class="input-row">
+        <label>Personalizado (mm):</label>
+        <input type="number" id="customMm" min="5" max="100" placeholder="mm" oninput="customCoin(this.value)">
+      </div>
+
+      <div class="status-bar" id="statusCalib"></div>
+      <div class="canvas-wrap" id="wrapCalib"><canvas id="cvCalib"></canvas></div>
+
+      <div id="calibResult" style="display:none">
+        <div class="results-grid">
+          <div class="metric"><div class="m-label">Escala</div><div class="m-value" id="scaleVal" style="font-size:16px">—</div><div class="m-sub">px/mm</div></div>
+          <div class="metric m-blue"><div class="m-label">4 mm</div><div class="m-value" id="t4v">—</div><div class="m-sub">umbral px</div></div>
+          <div class="metric m-green"><div class="m-label">8 mm</div><div class="m-value" id="t8v">—</div><div class="m-sub">umbral px</div></div>
+          <div class="metric m-orange"><div class="m-label">12 mm</div><div class="m-value" id="t12v">—</div><div class="m-sub">umbral px</div></div>
+        </div>
+        <div class="btn-row" style="margin-top:10px">
+          <button class="btn-primary" onclick="applyCalib()">✓ Aplicar y guardar calibración</button>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /content -->
+</div><!-- /shell -->
+
+<!-- install banner -->
+<div id="installBanner">
+  <div>
+    <p>Instalar como app nativa</p>
+    <span>Funciona sin conexión</span>
+  </div>
+  <button class="btn-primary" id="installBtn">Instalar</button>
+</div>
+
+
+<script src="js/app.js"></script>
+<script>
+  /* ── install prompt ── */
+  let deferredPrompt;
+  window.addEventListener('beforeinstallprompt', e => {
+    e.preventDefault();
+    deferredPrompt = e;
+    document.getElementById('installBanner').style.display = 'flex';
+  });
+  document.getElementById('installBtn').addEventListener('click', async () => {
+    if (!deferredPrompt) return;
+    deferredPrompt.prompt();
+    const { outcome } = await deferredPrompt.userChoice;
+    deferredPrompt = null;
+    document.getElementById('installBanner').style.display = 'none';
+  });
+  window.addEventListener('appinstalled', () => {
+    document.getElementById('installBanner').style.display = 'none';
+  });
+</script>
+</body>
+</html>
