@@ -18,6 +18,61 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 /* ══ SETTINGS ══ */
+/* ══ PERFILES DE PRODUCTO ══ */
+const PROFILES = {
+  '4': {
+    desc: `Electrodos de disco de plata sinterizada de 4mm de diámetro. Son discos circulares MUY PEQUEÑOS, color marrón oscuro casi negro, con un hilo fino de conexión saliendo del centro. INSTRUCCIONES CRÍTICAS: estos objetos son extremadamente pequeños y tienden a agruparse. Examina cada zona oscura con detalle — si ves una masa o grupo, asume que hay múltiples discos individuales y cuenta cada punto oscuro circular por separado. Cuenta cada disco individualmente aunque se toquen o solapen. Ignora completamente los hilos, solo cuenta los discos circulares.`,
+    size: 'single', singleSize: '4'
+  },
+  '8': {
+    desc: `Electrodos de disco de plata sinterizada de 8mm de diámetro. Son discos circulares de tamaño mediano, color marrón oscuro, con un hilo fino de conexión saliendo del centro. Cuando dos discos se toquen o solapen parcialmente cuenta cada uno como unidad independiente. Si ves zonas con solapamiento cuenta todos los discos visibles individualmente. Ignora completamente los hilos de conexión, solo cuenta los discos circulares.`,
+    size: 'single', singleSize: '8'
+  },
+  '12': {
+    desc: `Electrodos de disco de plata sinterizada de 12mm de diámetro. Son discos circulares GRANDES, color marrón oscuro, con un hilo fino de conexión saliendo del centro. Al ser grandes generalmente son fáciles de distinguir individualmente. Cuenta cada disco por separado aunque se toquen en los bordes. Ignora completamente los hilos de conexión, solo cuenta los discos circulares.`,
+    size: 'single', singleSize: '12'
+  },
+  'custom': {
+    desc: localStorage.getItem('productDesc') || '',
+    size: 'single', singleSize: '8'
+  }
+};
+
+window.loadProfile = function(key) {
+  const p = PROFILES[key];
+  if (!p) return;
+
+  /* si es custom, solo activa el botón sin sobreescribir el texto */
+  if (key !== 'custom') {
+    qs('#productDesc').value = p.desc;
+    localStorage.setItem('productDesc', p.desc);
+  }
+
+  /* selector de tamaño */
+  qs('#sizeMode').value = p.size;
+  qs('#singleSizeWrap').style.display = p.size === 'single' ? 'block' : 'none';
+  if (p.singleSize) qs('#singleSize').value = p.singleSize;
+
+  /* resaltar botón activo */
+  ['4','8','12','custom'].forEach(k => {
+    const btn = qs('#prof' + k);
+    if (!btn) return;
+    if (k === key) {
+      btn.style.background = 'var(--blue-dim)';
+      btn.style.borderColor = 'var(--blue)';
+      btn.style.color = 'var(--blue)';
+    } else {
+      btn.style.background = '';
+      btn.style.borderColor = '';
+      btn.style.color = '';
+    }
+  });
+
+  localStorage.setItem('activeProfile', key);
+  showToast(key === 'custom' ? 'Perfil personalizado activo' : `Perfil ${key}mm cargado`);
+};
+
+
 function restoreSettings() {
   const key = localStorage.getItem('claudeApiKey');
   if (key && qs('#apiKeyInput')) {
@@ -26,6 +81,14 @@ function restoreSettings() {
   }
   const desc = localStorage.getItem('productDesc');
   if (desc && qs('#productDesc')) qs('#productDesc').value = desc;
+  /* restaurar perfil activo */
+  const activeProfile = localStorage.getItem('activeProfile');
+  if (activeProfile) {
+    setTimeout(() => {
+      const btn = qs('#prof' + activeProfile);
+      if (btn) { btn.style.background='var(--blue-dim)'; btn.style.borderColor='var(--blue)'; btn.style.color='var(--blue)'; }
+    }, 100);
+  }
   const w = JSON.parse(localStorage.getItem('unitWeights') || '{}');
   if (qs('#w4'))  qs('#w4').value  = w.p4  || UNIT_WEIGHTS.p4;
   if (qs('#w8'))  qs('#w8').value  = w.p8  || UNIT_WEIGHTS.p8;
