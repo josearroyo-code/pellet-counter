@@ -76,6 +76,7 @@
   <div class="topbar">
     <h1>Pellet Counter <span class="ai-badge">✦ Claude AI</span></h1>
     <div style="display:flex;align-items:center;gap:8px">
+      <span style="font-size:10px;color:var(--hint);font-family:monospace">v7.0</span>
       <div id="analyzeSpinner" class="spinner"></div>
     </div>
   </div>
@@ -251,5 +252,25 @@
 </div>
 
 <script src="js/app.js"></script>
+<div id="splash" style="position:fixed;inset:0;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:9999;transition:opacity 0.4s">
+  <div style="font-size:40px;margin-bottom:16px">⬤</div>
+  <div style="font-size:20px;font-weight:700;color:var(--text);letter-spacing:-0.5px">Pellet Counter</div>
+  <div style="font-size:12px;color:var(--green);font-weight:600;margin-top:6px;display:flex;align-items:center;gap:6px">
+    <span>✦ Claude AI</span>
+    <span style="color:var(--hint)">·</span>
+    <span style="font-family:monospace">v7.0</span>
+  </div>
+  <div style="margin-top:28px;width:48px;height:2px;background:var(--surface2);border-radius:2px;overflow:hidden">
+    <div id="splashBar" style="height:100%;background:var(--green);border-radius:2px;animation:load 1.2s ease-out forwards"></div>
+  </div>
+</div>
+<style>@keyframes load{from{width:0}to{width:100%}}</style>
+<script>
+  setTimeout(() => {
+    const s = document.getElementById('splash');
+    s.style.opacity = '0';
+    setTimeout(() => s.remove(), 400);
+  }, 1400);
+</script>
 </body>
 </html>
