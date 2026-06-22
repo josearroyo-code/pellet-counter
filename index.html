@@ -95,7 +95,13 @@
 
       <div class="card">
         <p class="card-label">Producto a contar</p>
-        <textarea id="productDesc" rows="2" placeholder="Ej: pellets circulares marrón oscuro con hilo fino en el centro" style="resize:none;line-height:1.5;margin-bottom:8px" oninput="saveProductDesc()"></textarea>
+        <div style="display:flex;gap:6px;margin-bottom:8px">
+          <button onclick="loadProfile('4')"  id="prof4"  style="flex:1;justify-content:center;font-size:12px;padding:7px 4px">● 4mm</button>
+          <button onclick="loadProfile('8')"  id="prof8"  style="flex:1;justify-content:center;font-size:12px;padding:7px 4px">● 8mm</button>
+          <button onclick="loadProfile('12')" id="prof12" style="flex:1;justify-content:center;font-size:12px;padding:7px 4px">● 12mm</button>
+          <button onclick="loadProfile('custom')" id="profCustom" style="flex:1;justify-content:center;font-size:12px;padding:7px 4px">✏️</button>
+        </div>
+        <textarea id="productDesc" rows="3" placeholder="Selecciona un perfil arriba o escribe tu descripción personalizada" style="resize:none;line-height:1.5;margin-bottom:8px;font-size:12px" oninput="saveProductDesc()"></textarea>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           <select id="sizeMode" style="flex:1;min-width:130px" onchange="qs('#singleSizeWrap').style.display=this.value==='single'?'block':'none'">
             <option value="single">Un solo tamaño</option>
