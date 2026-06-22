@@ -1,4 +1,4 @@
-/* ── Pellet Counter v7 — Claude Vision Full ── */
+/* ── Pellet Counter v7.1 — Claude Vision Full ── */
 let imgCount = null;
 let lastImageBase64 = null;
 let lastImageMime = 'image/jpeg';
@@ -15,21 +15,22 @@ document.addEventListener('DOMContentLoaded', () => {
   initGrav();
   loadHistory();
   updateHistoryBadge();
+  setTimeout(() => { renderProductSelector(); }, 50);
 });
 
 /* ══ SETTINGS ══ */
 /* ══ PERFILES DE PRODUCTO ══ */
 const PROFILES = {
   '4': {
-    desc: `Electrodos de disco de plata sinterizada de 4mm de diámetro. Son discos circulares MUY PEQUEÑOS, color marrón oscuro casi negro, con un hilo fino de conexión saliendo del centro. INSTRUCCIONES CRÍTICAS: estos objetos son extremadamente pequeños y tienden a agruparse. Examina cada zona oscura con detalle — si ves una masa o grupo, asume que hay múltiples discos individuales y cuenta cada punto oscuro circular por separado. Cuenta cada disco individualmente aunque se toquen o solapen. Ignora completamente los hilos, solo cuenta los discos circulares.`,
+    desc: `Electrodos de disco de plata sinterizada de 4mm de diámetro. Son discos circulares MUY PEQUEÑOS, color marrón claro cuando recién llegan del proveedor, puede oscurecerse con la luz, con un hilo fino de conexión saliendo del centro. INSTRUCCIONES CRÍTICAS: estos objetos son extremadamente pequeños y tienden a agruparse. Examina cada zona oscura con detalle — si ves una masa o grupo, asume que hay múltiples discos individuales y cuenta cada punto oscuro circular por separado. Cuenta cada disco individualmente aunque se toquen o solapen. Ignora completamente los hilos, solo cuenta los discos circulares.`,
     size: 'single', singleSize: '4'
   },
   '8': {
-    desc: `Electrodos de disco de plata sinterizada de 8mm de diámetro. Son discos circulares de tamaño mediano, color marrón oscuro, con un hilo fino de conexión saliendo del centro. Cuando dos discos se toquen o solapen parcialmente cuenta cada uno como unidad independiente. Si ves zonas con solapamiento cuenta todos los discos visibles individualmente. Ignora completamente los hilos de conexión, solo cuenta los discos circulares.`,
+    desc: `Electrodos de disco de plata sinterizada de 8mm de diámetro. Son discos circulares de tamaño mediano, color marrón claro o marrón oscuro dependiendo de la exposición a la luz, con un hilo fino de conexión saliendo del centro. Cuando dos discos se toquen o solapen parcialmente cuenta cada uno como unidad independiente. Si ves zonas con solapamiento cuenta todos los discos visibles individualmente. Ignora completamente los hilos de conexión, solo cuenta los discos circulares.`,
     size: 'single', singleSize: '8'
   },
   '12': {
-    desc: `Electrodos de disco de plata sinterizada de 12mm de diámetro. Son discos circulares GRANDES, color marrón oscuro, con un hilo fino de conexión saliendo del centro. Al ser grandes generalmente son fáciles de distinguir individualmente. Cuenta cada disco por separado aunque se toquen en los bordes. Ignora completamente los hilos de conexión, solo cuenta los discos circulares.`,
+    desc: `Electrodos de disco de plata sinterizada de 12mm de diámetro. Son discos circulares GRANDES, color marrón claro o marrón oscuro dependiendo de la exposición a la luz, con un hilo fino de conexión saliendo del centro. Al ser grandes generalmente son fáciles de distinguir individualmente. Cuenta cada disco por separado aunque se toquen en los bordes. Ignora completamente los hilos de conexión, solo cuenta los discos circulares.`,
     size: 'single', singleSize: '12'
   },
   'custom': {
@@ -124,6 +125,113 @@ window.saveProductDesc = function() {
 };
 
 function getApiKey() { return localStorage.getItem('claudeApiKey') || ''; }
+
+
+/* ══ SISTEMA DE PRODUCTOS ESCALABLE ══ */
+const DEFAULT_PRODUCTS = {
+  'pellets': {
+    name: 'Pellets electrodo',
+    icon: '⬤',
+    profiles: {
+      '4': `Electrodos de disco de plata sinterizada de 4mm de diámetro. Son discos circulares MUY PEQUEÑOS, color marrón claro o marrón oscuro dependiendo de la exposición a la luz, con un hilo fino de conexión saliendo del centro. INSTRUCCIONES CRÍTICAS: estos objetos son extremadamente pequeños y tienden a agruparse. Examina cada zona oscura con detalle — si ves una masa o grupo, asume que hay múltiples discos individuales y cuenta cada punto oscuro circular por separado. Cuenta cada disco individualmente aunque se toquen o solapen. Ignora completamente los hilos, solo cuenta los discos circulares.`,
+      '8': `Electrodos de disco de plata sinterizada de 8mm de diámetro. Son discos circulares de tamaño mediano, color marrón claro o marrón oscuro dependiendo de la exposición a la luz, con un hilo fino de conexión saliendo del centro. Cuando dos discos se toquen o solapen parcialmente cuenta cada uno como unidad independiente. Si ves zonas con solapamiento cuenta todos los discos visibles individualmente. Ignora completamente los hilos de conexión, solo cuenta los discos circulares.`,
+      '12': `Electrodos de disco de plata sinterizada de 12mm de diámetro. Son discos circulares GRANDES, color marrón claro o marrón oscuro dependiendo de la exposición a la luz, con un hilo fino de conexión saliendo del centro. Al ser grandes generalmente son fáciles de distinguir individualmente. Cuenta cada disco por separado aunque se toquen en los bordes. Ignora completamente los hilos de conexión, solo cuenta los discos circulares.`
+    }
+  }
+};
+
+function getProducts() {
+  const saved = localStorage.getItem('customProducts');
+  const custom = saved ? JSON.parse(saved) : {};
+  return { ...DEFAULT_PRODUCTS, ...custom };
+}
+
+function saveCustomProduct(id, name, icon, desc) {
+  const saved = JSON.parse(localStorage.getItem('customProducts') || '{}');
+  saved[id] = { name, icon, profiles: { custom: desc } };
+  localStorage.setItem('customProducts', JSON.stringify(saved));
+}
+
+window.renderProductSelector = function() {
+  const container = qs('#productSelector');
+  if (!container) return;
+  const products = getProducts();
+  const active = localStorage.getItem('activeProduct') || 'pellets';
+  container.innerHTML = Object.entries(products).map(([id, p]) => `
+    <button onclick="selectProduct('${id}')" style="flex:1;min-width:80px;justify-content:center;flex-direction:column;gap:2px;padding:8px 4px;font-size:11px;${id===active?'background:var(--blue-dim);border-color:var(--blue);color:var(--blue)':''}">
+      <span style="font-size:16px">${p.icon}</span>
+      <span>${p.name}</span>
+    </button>
+  `).join('') + `
+    <button onclick="showAddProduct()" style="flex:1;min-width:60px;justify-content:center;flex-direction:column;gap:2px;padding:8px 4px;font-size:11px;">
+      <span style="font-size:16px">➕</span>
+      <span>Nuevo</span>
+    </button>`;
+};
+
+window.selectProduct = function(id) {
+  localStorage.setItem('activeProduct', id);
+  const products = getProducts();
+  const p = products[id];
+  if (!p) return;
+  /* actualizar perfiles disponibles */
+  const profiles = p.profiles;
+  const firstKey = Object.keys(profiles)[0];
+  if (profiles[firstKey]) {
+    qs('#productDesc').value = profiles[firstKey];
+    localStorage.setItem('productDesc', profiles[firstKey]);
+  }
+  renderProductSelector();
+  /* actualizar botones de perfil según producto */
+  updateProfileButtons(profiles);
+  showToast(`Producto: ${p.name}`);
+};
+
+function updateProfileButtons(profiles) {
+  const profileBar = qs('#profileBar');
+  if (!profileBar) return;
+  const keys = Object.keys(profiles);
+  profileBar.innerHTML = keys.map(k => `
+    <button onclick="loadProfileKey('${k}')" id="prof${k}" style="flex:1;justify-content:center;font-size:12px;padding:7px 4px">${k === 'custom' ? '✏️ Propio' : `● ${k}${k.match(/^\d+$/) ? 'mm' : ''}`}</button>
+  `).join('') + `<button onclick="loadProfile('custom')" style="flex:1;justify-content:center;font-size:12px;padding:7px 4px">✏️</button>`;
+}
+
+window.loadProfileKey = function(key) {
+  const products = getProducts();
+  const activeProduct = localStorage.getItem('activeProduct') || 'pellets';
+  const p = products[activeProduct];
+  if (!p || !p.profiles[key]) return;
+  qs('#productDesc').value = p.profiles[key];
+  localStorage.setItem('productDesc', p.profiles[key]);
+  /* tamaño automático si es número */
+  if (key.match(/^\d+$/)) {
+    qs('#sizeMode').value = 'single';
+    qs('#singleSizeWrap').style.display = 'block';
+    if (['4','8','12'].includes(key)) qs('#singleSize').value = key;
+  }
+  /* resaltar */
+  document.querySelectorAll('#profileBar button').forEach(b => {
+    b.style.background = ''; b.style.borderColor = ''; b.style.color = '';
+  });
+  const btn = qs('#prof' + key);
+  if (btn) { btn.style.background='var(--blue-dim)'; btn.style.borderColor='var(--blue)'; btn.style.color='var(--blue)'; }
+  localStorage.setItem('activeProfile', key);
+  showToast(`Perfil ${key}${key.match(/^\d+$/) ? 'mm' : ''} cargado`);
+};
+
+window.showAddProduct = function() {
+  const name = prompt('Nombre del nuevo producto:');
+  if (!name) return;
+  const icon = prompt('Emoji icono (ej: 🔩 💊 🪙):') || '📦';
+  const desc = prompt('Descripción para la IA (qué debe contar y cómo):');
+  if (!desc) return;
+  const id = 'prod_' + Date.now();
+  saveCustomProduct(id, name, icon, desc);
+  localStorage.setItem('activeProduct', id);
+  renderProductSelector();
+  showToast(`Producto "${name}" añadido`);
+};
+
 
 /* ══ TABS ══ */
 window.switchTab = function(name) {
