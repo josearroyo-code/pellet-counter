@@ -1,401 +1,414 @@
-/* ── Pellet Counter v4 — algoritmo mejorado sin OpenCV ── */
-let imgCount = null, imgCalib = null;
-let runTimer = null;
-let coinMm = 23.25;
-let calibScale = null, calibThresholds = null;
-let counts = { c4: 0, c8: 0, c12: 0 };
+/* ── Pellet Counter v7 — Claude Vision Full ── */
+let imgCount = null;
+let lastImageBase64 = null;
+let lastImageMime = 'image/jpeg';
+let isAnalyzing = false;
+let analysisHistory = [];
+let counts = { c4: 0, c8: 0, c12: 0, total: 0 };
+const UNIT_WEIGHTS = { p4: 0.12, p8: 0.05, p12: 0.12 };
 
 const qs  = s => document.querySelector(s);
 const qsa = s => document.querySelectorAll(s);
 
 document.addEventListener('DOMContentLoaded', () => {
-  const st = qs('#cv-status');
-  if (st) st.style.display = 'none';
-  restoreCalib();
+  restoreSettings();
+  initGrav();
+  loadHistory();
+  updateHistoryBadge();
 });
 
-function setStatus(id, msg) {
-  const el = qs('#' + id);
-  if (!el) return;
-  el.style.display = 'block';
-  el.textContent = msg;
+/* ══ SETTINGS ══ */
+function restoreSettings() {
+  const key = localStorage.getItem('claudeApiKey');
+  if (key && qs('#apiKeyInput')) {
+    qs('#apiKeyInput').value = key;
+    showApiStatus('✓ API key guardada', '#3ecf8e');
+  }
+  const desc = localStorage.getItem('productDesc');
+  if (desc && qs('#productDesc')) qs('#productDesc').value = desc;
+  const w = JSON.parse(localStorage.getItem('unitWeights') || '{}');
+  if (qs('#w4'))  qs('#w4').value  = w.p4  || UNIT_WEIGHTS.p4;
+  if (qs('#w8'))  qs('#w8').value  = w.p8  || UNIT_WEIGHTS.p8;
+  if (qs('#w12')) qs('#w12').value = w.p12 || UNIT_WEIGHTS.p12;
 }
 
+function showApiStatus(msg, color) {
+  const el = qs('#apiKeyStatus');
+  if (!el) return;
+  el.textContent = msg;
+  el.style.color = color || '';
+}
+
+window.saveApiKey = function() {
+  const key = qs('#apiKeyInput').value.trim();
+  if (!key.startsWith('sk-ant-')) {
+    showApiStatus('✗ Clave inválida — debe empezar por sk-ant-', '#f97316');
+    return;
+  }
+  localStorage.setItem('claudeApiKey', key);
+  showApiStatus('✓ API key guardada correctamente', '#3ecf8e');
+};
+
+window.toggleApiKey = function() {
+  const inp = qs('#apiKeyInput');
+  inp.type = inp.type === 'password' ? 'text' : 'password';
+};
+
+window.saveProductDesc = function() {
+  const desc = qs('#productDesc').value.trim();
+  localStorage.setItem('productDesc', desc);
+  showToast('Descripción guardada');
+};
+
+function getApiKey() { return localStorage.getItem('claudeApiKey') || ''; }
+
+/* ══ TABS ══ */
 window.switchTab = function(name) {
   qsa('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
   qsa('.panel').forEach(p => p.classList.toggle('active', p.id === 'panel-' + name));
 };
 
-window.selectCoin = function(el, mm) {
-  qsa('.coin-btn').forEach(b => b.classList.remove('selected'));
-  el.classList.add('selected'); coinMm = mm;
-  qs('#customMm').value = '';
+/* ══ TOAST ══ */
+function showToast(msg, isError) {
+  let t = qs('#toast');
+  if (!t) { t = document.createElement('div'); t.id = 'toast'; document.body.appendChild(t); }
+  t.textContent = msg;
+  t.style.cssText = `position:fixed;bottom:calc(env(safe-area-inset-bottom,0px) + 80px);left:50%;transform:translateX(-50%);background:${isError?'#3a1a06':'#1a3a2c'};color:${isError?'#f97316':'#3ecf8e'};border:0.5px solid ${isError?'#f97316':'#3ecf8e'};padding:10px 18px;border-radius:20px;font-size:13px;z-index:9999;font-weight:500;pointer-events:none;transition:opacity 0.3s`;
+  t.style.opacity = '1';
+  clearTimeout(t._timer);
+  t._timer = setTimeout(() => t.style.opacity = '0', 2500);
 };
 
-window.customCoin = function(v) {
-  const f = parseFloat(v);
-  if (f > 0) { coinMm = f; qsa('.coin-btn').forEach(b => b.classList.remove('selected')); }
+/* ══ HISTORIA ══ */
+function loadHistory() {
+  return JSON.parse(localStorage.getItem('analysisHistory') || '[]');
+}
+function saveHistory(entry) {
+  const h = loadHistory();
+  h.unshift(entry);
+  if (h.length > 50) h.pop();
+  localStorage.setItem('analysisHistory', JSON.stringify(h));
+  updateHistoryBadge();
+  renderHistory();
+}
+function updateHistoryBadge() {
+  const h = loadHistory();
+  const badge = qs('#historyBadge');
+  if (badge) badge.textContent = h.length > 0 ? h.length : '';
+}
+function renderHistory() {
+  const container = qs('#historyList');
+  if (!container) return;
+  const h = loadHistory();
+  if (h.length === 0) {
+    container.innerHTML = '<p style="color:var(--muted);font-size:13px;text-align:center;padding:20px">Sin análisis aún</p>';
+    return;
+  }
+  container.innerHTML = h.map((e, i) => `
+    <div style="background:var(--surface);border:0.5px solid var(--border);border-radius:var(--radius);padding:12px;margin-bottom:10px">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px">
+        <div>
+          <span style="font-size:13px;font-weight:600;color:var(--text)">${e.total} uds</span>
+          <span style="font-size:11px;color:var(--muted);margin-left:8px">${e.date}</span>
+        </div>
+        <span style="font-size:11px;padding:2px 8px;border-radius:10px;background:${e.confidence==='alta'?'var(--green-dim)':e.confidence==='media'?'#2a1f06':'var(--orange-dim)'};color:${e.confidence==='alta'?'#3ecf8e':e.confidence==='media'?'#f59e0b':'#f97316'}">${e.confidence}</span>
+      </div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:6px">${e.product || 'Sin descripción'}</div>
+      ${e.notes ? `<div style="font-size:11px;color:var(--hint);font-style:italic">${e.notes}</div>` : ''}
+      <div style="display:flex;gap:12px;margin-top:8px">
+        ${e.size4>0?`<span style="font-size:12px;color:#4a9eff">4mm: ${e.size4}</span>`:''}
+        ${e.size8>0?`<span style="font-size:12px;color:#3ecf8e">8mm: ${e.size8}</span>`:''}
+        ${e.size12>0?`<span style="font-size:12px;color:#f97316">12mm: ${e.size12}</span>`:''}
+      </div>
+      ${e.odoo ? `<button onclick="copyHistoryEntry(${i})" style="margin-top:8px;padding:6px 12px;font-size:11px">📋 Copiar Odoo</button>` : ''}
+    </div>
+  `).join('');
+}
+window.copyHistoryEntry = function(i) {
+  const h = loadHistory();
+  if (h[i]?.odoo) navigator.clipboard.writeText(h[i].odoo).then(() => showToast('Copiado'));
+};
+window.clearHistory = function() {
+  if (!confirm('¿Borrar todo el historial?')) return;
+  localStorage.removeItem('analysisHistory');
+  updateHistoryBadge();
+  renderHistory();
 };
 
-/* ══════════════════════════════════════════════════════
-   NÚCLEO DE DETECCIÓN v4
-   1. Umbral dinámico por histograma (Otsu adaptado)
-   2. Mapa de gradiente para encontrar bordes reales
-   3. Hough circle transform simplificado en canvas
-   4. Filtro de circularidad para eliminar fantasmas
-   5. Non-maximum suppression por distancia
-   ══════════════════════════════════════════════════════ */
-
-function toGray(data, w, h) {
-  const g = new Uint8Array(w * h);
-  for (let i = 0; i < w * h; i++)
-    g[i] = (77*data[i*4] + 150*data[i*4+1] + 29*data[i*4+2]) >> 8;
-  return g;
-}
-
-function gaussianBlur(g, w, h) {
-  const out = new Uint8Array(w * h);
-  const k = [1,2,1,2,4,2,1,2,1];
-  for (let y=1; y<h-1; y++) for (let x=1; x<w-1; x++) {
-    let s=0;
-    for (let ky=-1; ky<=1; ky++) for (let kx=-1; kx<=1; kx++)
-      s += g[(y+ky)*w+(x+kx)] * k[(ky+1)*3+(kx+1)];
-    out[y*w+x] = s >> 4;
-  }
-  return out;
-}
-
-function otsuThreshold(g, w, h) {
-  const hist = new Int32Array(256);
-  for (let i=0; i<w*h; i++) hist[g[i]]++;
-  const total = w*h;
-  let sum=0; for (let i=0;i<256;i++) sum+=i*hist[i];
-  let sumB=0, wB=0, max=0, thresh=0;
-  for (let i=0;i<256;i++) {
-    wB+=hist[i]; if(!wB) continue;
-    const wF=total-wB; if(!wF) break;
-    sumB+=i*hist[i];
-    const mB=sumB/wB, mF=(sum-sumB)/wF;
-    const between=wB*wF*(mB-mF)*(mB-mF);
-    if(between>max){max=between;thresh=i;}
-  }
-  return thresh;
-}
-
-function gradientMag(g, w, h) {
-  const mag = new Uint8Array(w * h);
-  for (let y=1;y<h-1;y++) for (let x=1;x<w-1;x++) {
-    const gx = -g[(y-1)*w+(x-1)] - 2*g[y*w+(x-1)] - g[(y+1)*w+(x-1)]
-               +g[(y-1)*w+(x+1)] + 2*g[y*w+(x+1)] + g[(y+1)*w+(x+1)];
-    const gy = -g[(y-1)*w+(x-1)] - 2*g[(y-1)*w+x] - g[(y-1)*w+(x+1)]
-               +g[(y+1)*w+(x-1)] + 2*g[(y+1)*w+x] + g[(y+1)*w+(x+1)];
-    mag[y*w+x] = Math.min(255, Math.sqrt(gx*gx+gy*gy) >> 1);
-  }
-  return mag;
-}
-
-function detectCirclesV4(canvas, minR, maxR, minDist, sensitivityPct) {
-  const ctx = canvas.getContext('2d');
-  const w = canvas.width, h = canvas.height;
-  const raw = ctx.getImageData(0,0,w,h).data;
-
-  const gray    = toGray(raw, w, h);
-  const blurred = gaussianBlur(gray, w, h);
-  const otsu    = otsuThreshold(blurred, w, h);
-  const mag     = gradientMag(blurred, w, h);
-
-  /* umbral de borde adaptativo */
-  const edgeThr = Math.max(15, Math.round(otsu * 0.25 * (1 - sensitivityPct/100)));
-
-  /* acumulador Hough simplificado */
-  const acc = new Float32Array(w * h);
-  const step = Math.max(1, Math.floor(minR / 3));
-
-  for (let y=maxR; y<h-maxR; y+=step) {
-    for (let x=maxR; x<w-maxR; x+=step) {
-      if (mag[y*w+x] < edgeThr) continue;
-      for (let r=minR; r<=maxR; r+=Math.max(1,Math.floor(r*0.12))) {
-        const samples = Math.max(20, Math.floor(2*Math.PI*r/2));
-        let edgeVotes=0;
-        for (let s=0; s<samples; s++) {
-          const a = (2*Math.PI*s)/samples;
-          const cx = Math.round(x - r*Math.cos(a));
-          const cy = Math.round(y - r*Math.sin(a));
-          if (cx<0||cx>=w||cy<0||cy>=h) continue;
-          acc[cy*w+cx] += 1/samples;
-        }
-      }
-    }
-  }
-
-  /* encontrar picos en acumulador */
-  const minScore = 0.18 * (1 - sensitivityPct/200);
-  const candidates = [];
-  for (let y=maxR; y<h-maxR; y++) for (let x=maxR; x<w-maxR; x++) {
-    if (acc[y*w+x] < minScore) continue;
-    /* verificar que es máximo local */
-    let isMax = true;
-    for (let dy=-3; dy<=3 && isMax; dy++)
-      for (let dx=-3; dx<=3 && isMax; dx++)
-        if (dx||dy) if (acc[(y+dy)*w+(x+dx)] > acc[y*w+x]) isMax=false;
-    if (!isMax) continue;
-
-    /* encontrar radio más probable para este centro */
-    let bestR=minR, bestRScore=0;
-    for (let r=minR; r<=maxR; r+=Math.max(1,Math.floor(r*0.1))) {
-      const samples = Math.max(20, Math.floor(2*Math.PI*r/2));
-      let edgeCount=0, totalSamples=0;
-      for (let s=0; s<samples; s++) {
-        const a = (2*Math.PI*s)/samples;
-        const px = Math.round(x + r*Math.cos(a));
-        const py = Math.round(y + r*Math.sin(a));
-        if (px<0||px>=w||py<0||py>=h) continue;
-        totalSamples++;
-        if (mag[py*w+px] >= edgeThr) edgeCount++;
-      }
-      const score = totalSamples>0 ? edgeCount/totalSamples : 0;
-      if (score > bestRScore) { bestRScore=score; bestR=r; }
-    }
-
-    /* filtro de circularidad — descartar si < 25% del borde es real */
-    if (bestRScore < 0.22) continue;
-
-    /* verificar interior más claro o más oscuro que exterior (objeto real) */
-    const innerVal = blurred[y*w+x];
-    const outerX = Math.round(x + bestR*1.6);
-    const outerY = y;
-    const outerVal = (outerX<w) ? blurred[outerY*w+outerX] : 0;
-    const contrast = Math.abs(innerVal - outerVal);
-    if (contrast < 12) continue;
-
-    candidates.push({ x, y, r: bestR, score: acc[y*w+x] * bestRScore });
-  }
-
-  /* non-maximum suppression */
-  candidates.sort((a,b) => b.score - a.score);
-  const kept = [];
-  for (const c of candidates) {
-    let tooClose = false;
-    for (const k of kept) {
-      if (Math.sqrt((c.x-k.x)**2+(c.y-k.y)**2) < minDist) { tooClose=true; break; }
-    }
-    if (!tooClose) kept.push(c);
-  }
-  return kept;
-}
-
-/* ── cargar y contar ── */
+/* ══ CARGAR IMAGEN ══ */
 window.loadCount = function(e) {
   const f = e.target.files[0]; if (!f) return;
-  const r = new FileReader();
-  r.onload = ev => {
+  lastImageMime = f.type || 'image/jpeg';
+  const reader = new FileReader();
+  reader.onload = ev => {
     imgCount = new Image();
     imgCount.onload = () => {
-      qs('#wrapCount').style.display = 'block';
+      renderCountCanvas();
+      lastImageBase64 = ev.target.result.split(',')[1];
       qs('#btnRecount').style.display = '';
-      runCount();
+      runCountAI();
     };
     imgCount.src = ev.target.result;
   };
-  r.readAsDataURL(f);
+  reader.readAsDataURL(f);
 };
 
-window.rerun = function() { clearTimeout(runTimer); runTimer = setTimeout(runCount, 350); };
-
-function getThresholds() { return calibThresholds || { t4:22, t8:45, t12:85 }; }
-
-window.runCount = function() {
-  if (!imgCount) return;
-  setStatus('statusCount', 'Analizando imagen…');
-
+function renderCountCanvas() {
   const canvas = qs('#cvCount');
-  const maxW = Math.min(window.innerWidth - 32, 720);
+  const maxW = Math.min(window.innerWidth - 32, 800);
   let w = imgCount.naturalWidth, h = imgCount.naturalHeight;
-  if (w > maxW) { h = Math.round(h*maxW/w); w = maxW; }
+  if (w > maxW) { h = Math.round(h * maxW / w); w = maxW; }
   canvas.width = w; canvas.height = h;
   canvas.getContext('2d').drawImage(imgCount, 0, 0, w, h);
+  qs('#wrapCount').style.display = 'block';
+}
 
-  const th     = getThresholds();
-  const sens   = parseInt(qs('#p1').value);
-  const minR   = parseInt(qs('#p2').value);
-  const maxR   = parseInt(qs('#p3').value);
-  const minD   = parseInt(qs('#p4').value);
+window.rerun = window.runCount = runCountAI;
 
-  setStatus('statusCount', 'Calculando… (puede tardar 2-3 seg en móvil)');
+/* ══ CLAUDE VISION ══ */
+async function runCountAI() {
+  if (!lastImageBase64 || isAnalyzing) return;
+  const apiKey = getApiKey();
+  if (!apiKey) {
+    showToast('Introduce tu API key en ⚙️ Ajustes', true);
+    switchTab('settings');
+    return;
+  }
 
-  setTimeout(() => {
-    try {
-      const circles = detectCirclesV4(canvas, minR, maxR, minD, sens);
-      const ctx = canvas.getContext('2d');
-      ctx.drawImage(imgCount, 0, 0, w, h);
+  isAnalyzing = true;
+  setStatus('statusCount', '🔍 Claude está analizando la imagen…');
+  qs('#btnRecount').disabled = true;
+  qs('#analyzeSpinner').style.display = 'block';
 
-      let c4=0, c8=0, c12=0, cO=0;
-      for (const c of circles) {
-        let color;
-        if      (c.r <= th.t4)  { c4++;  color='#4a9eff'; }
-        else if (c.r <= th.t8)  { c8++;  color='#3ecf8e'; }
-        else if (c.r <= th.t12) { c12++; color='#f97316'; }
-        else                    { cO++;  color='#555552'; }
-        ctx.strokeStyle=color; ctx.lineWidth=2;
-        ctx.beginPath(); ctx.arc(c.x,c.y,c.r,0,2*Math.PI); ctx.stroke();
-        ctx.fillStyle=color;
-        ctx.beginPath(); ctx.arc(c.x,c.y,3,0,2*Math.PI); ctx.fill();
+  const productDesc = qs('#productDesc').value.trim() ||
+    'pellets circulares de electrodo sinterizado, discos redondos de color marrón oscuro con un hilo fino saliendo del centro';
+  const sizeMode = qs('#sizeMode').value;
+  const albaranQty = parseInt(qs('#albaranQty').value) || 0;
+
+  const sizeInstruction = sizeMode === 'single'
+    ? `Todos son del mismo tamaño (${qs('#singleSize').value}mm). Devuelve small=0, large=0 y pon el total en medium.`
+    : `Clasifica por tamaño relativo: pequeños (~4mm) en "small", medianos (~8mm) en "medium", grandes (~12mm) en "large".`;
+
+  const prompt = `Eres un sistema experto de conteo industrial con precisión máxima.
+
+Objeto a contar: ${productDesc}
+
+${sizeInstruction}
+
+REGLAS CRÍTICAS:
+- Cuenta ÚNICAMENTE los objetos descritos. Ignora completamente hilos, cables, algodón, embalaje, fondo y cualquier otro elemento.
+- Si los objetos se tocan o solapan parcialmente, cuenta cada uno individualmente.
+- Incluye objetos parcialmente visibles en bordes si se ve más del 50% del objeto.
+- Si la imagen es borrosa o la iluminación es mala, indícalo en "notes" pero intenta contar igualmente.
+- Sé extremadamente preciso — esta cuenta verifica albaranes comerciales con implicaciones económicas.
+
+Responde ÚNICAMENTE con este JSON exacto, sin texto adicional, sin markdown:
+{"small":<int>,"medium":<int>,"large":<int>,"total":<int>,"confidence":"alta"|"media"|"baja","notes":<string|null>}`;
+
+  try {
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true'
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-6',
+        max_tokens: 300,
+        messages: [{ role: 'user', content: [
+          { type: 'image', source: { type: 'base64', media_type: lastImageMime, data: lastImageBase64 } },
+          { type: 'text', text: prompt }
+        ]}]
+      })
+    });
+
+    if (!response.ok) {
+      const err = await response.json();
+      throw new Error(err.error?.message || `HTTP ${response.status}`);
+    }
+
+    const data = await response.json();
+    const text = data.content[0].text.trim().replace(/```json|```/g, '').trim();
+    const result = JSON.parse(text);
+
+    counts = { c4: result.small||0, c8: result.medium||0, c12: result.large||0, total: result.total||0 };
+    if (sizeMode === 'single') counts.total = result.total || counts.c8;
+
+    /* UI resultados */
+    qs('#c4').textContent  = sizeMode === 'single' ? '—' : counts.c4;
+    qs('#c8').textContent  = sizeMode === 'single' ? counts.total : counts.c8;
+    qs('#c12').textContent = sizeMode === 'single' ? '—' : counts.c12;
+    qs('#cT').textContent  = counts.total;
+
+    /* verificación albarán */
+    if (albaranQty > 0) {
+      const diff = counts.total - albaranQty;
+      const albaranEl = qs('#albaranResult');
+      albaranEl.style.display = 'block';
+      if (diff === 0) {
+        albaranEl.innerHTML = `<span style="color:#3ecf8e">✓ Coincide con albarán (${albaranQty} uds)</span>`;
+      } else if (diff < 0) {
+        albaranEl.innerHTML = `<span style="color:#f97316">⚠️ FALTAN ${Math.abs(diff)} uds respecto al albarán (${albaranQty})</span>`;
+      } else {
+        albaranEl.innerHTML = `<span style="color:#f59e0b">ℹ️ SOBRAN ${diff} uds respecto al albarán (${albaranQty})</span>`;
       }
+    }
 
-      counts={c4,c8,c12};
-      qs('#c4').textContent=c4; qs('#c8').textContent=c8;
-      qs('#c12').textContent=c12; qs('#cT').textContent=c4+c8+c12;
-      qs('#resultsCount').style.display='block';
-      qs('#exportBox').style.display='block';
-      buildOdoo();
+    /* confianza */
+    const confColor = result.confidence==='alta' ? '#3ecf8e' : result.confidence==='media' ? '#f59e0b' : '#f97316';
+    const notesText = result.notes ? ` · ${result.notes}` : '';
+    setStatus('statusCount', `✓ ${counts.total} objetos detectados · Confianza: ${result.confidence}${notesText}`);
+    qs('#statusCount').style.color = confColor;
 
-      const extra = cO>0 ? ` · ${cO} fuera de rango`:'' ;
-      setStatus('statusCount',`${c4+c8+c12+cO} detectados${extra} · azul=4mm · verde=8mm · naranja=12mm`);
-    } catch(err) { setStatus('statusCount','Error: '+err.message); }
-  }, 80);
-};
+    /* overlay canvas */
+    drawOverlay(counts.total, result.confidence);
 
-/* ── exportación Odoo ── */
+    /* mostrar resultados y export */
+    qs('#resultsCount').style.display = 'block';
+    qs('#exportBox').style.display    = 'block';
+    buildOdoo();
+
+    /* guardar en historial */
+    const now = new Date();
+    saveHistory({
+      date: now.toLocaleDateString('es-ES') + ' ' + now.toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'}),
+      total: counts.total,
+      size4: counts.c4, size8: counts.c8, size12: counts.c12,
+      product: productDesc.slice(0,60),
+      confidence: result.confidence,
+      notes: result.notes,
+      odoo: qs('#odooBlock').textContent
+    });
+
+  } catch(err) {
+    setStatus('statusCount', '✗ Error: ' + err.message, true);
+    qs('#statusCount').style.color = '#f97316';
+    showToast('Error al analizar: ' + err.message, true);
+  } finally {
+    isAnalyzing = false;
+    qs('#btnRecount').disabled = false;
+    qs('#analyzeSpinner').style.display = 'none';
+  }
+}
+
+function drawOverlay(total, confidence) {
+  const canvas = qs('#cvCount');
+  const ctx = canvas.getContext('2d');
+  const confColor = confidence==='alta' ? '#3ecf8e' : confidence==='media' ? '#f59e0b' : '#f97316';
+  ctx.fillStyle = 'rgba(0,0,0,0.65)';
+  ctx.beginPath();
+  if (ctx.roundRect) ctx.roundRect(10,10,170,58,10); else ctx.rect(10,10,170,58);
+  ctx.fill();
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 26px -apple-system,sans-serif';
+  ctx.fillText(`${total} uds`, 20, 44);
+  ctx.font = '12px -apple-system,sans-serif';
+  ctx.fillStyle = confColor;
+  ctx.fillText(`Confianza ${confidence}`, 20, 60);
+}
+
+function setStatus(id, msg, isError) {
+  const el = qs('#' + id);
+  if (!el) return;
+  el.style.display = 'block';
+  el.textContent = msg;
+  el.style.color = isError ? '#f97316' : '';
+}
+
+/* ══ EXPORT ODOO ══ */
 window.buildOdoo = function() {
   const prov=qs('#exProveedor').value||'—', po=qs('#exPO').value||'—';
   const pref=qs('#exLote').value||'P', ubic=qs('#exUbic').value||'WH/Stock';
+  const alb=qs('#albaranQty').value||'—';
   const now=new Date();
   const fecha=now.toLocaleDateString('es-ES');
   const hora=now.toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'});
   const seq=Math.floor(Math.random()*900)+100;
   const pad=n=>String(n).padStart(3,'0');
-  qs('#odooBlock').textContent=[
-    '=== RECEPCIÓN DE PELLETS ===',
-    `Fecha:       ${fecha}  ${hora}`,
-    `Proveedor:   ${prov}`,`PO:          ${po}`,`Ubicación:   ${ubic}`,'---',
-    `Pellet  4mm  |  Lote: ${pref}-4MM-${pad(seq)}    |  Cant: ${counts.c4}`,
-    `Pellet  8mm  |  Lote: ${pref}-8MM-${pad(seq+1)}  |  Cant: ${counts.c8}`,
-    `Pellet 12mm  |  Lote: ${pref}-12MM-${pad(seq+2)} |  Cant: ${counts.c12}`,'---',
-    `Total:       ${counts.c4+counts.c8+counts.c12} uds`,
-    `Verificado:  visión artificial v4`,
-  ].join('\n');
+  const sizeMode=qs('#sizeMode').value;
+  const diff = parseInt(qs('#albaranQty').value) > 0 ? counts.total - parseInt(qs('#albaranQty').value) : null;
+  const lines=[
+    '=== RECEPCIÓN DE PELLETS — VERIFICADO IA ===',
+    `Fecha:        ${fecha}  ${hora}`,
+    `Proveedor:    ${prov}`,`PO:           ${po}`,`Ubicación:    ${ubic}`,
+    `Albarán:      ${alb} uds`,
+    '---',
+  ];
+  if(sizeMode==='single'){
+    const sz=qs('#singleSize').value;
+    lines.push(`Pellet ${sz}mm   |  Lote: ${pref}-${sz}MM-${pad(seq)}  |  Cant: ${counts.total}`);
+  } else {
+    if(counts.c4>0)  lines.push(`Pellet  4mm  |  Lote: ${pref}-4MM-${pad(seq)}    |  Cant: ${counts.c4}`);
+    if(counts.c8>0)  lines.push(`Pellet  8mm  |  Lote: ${pref}-8MM-${pad(seq+1)}  |  Cant: ${counts.c8}`);
+    if(counts.c12>0) lines.push(`Pellet 12mm  |  Lote: ${pref}-12MM-${pad(seq+2)} |  Cant: ${counts.c12}`);
+  }
+  lines.push('---');
+  lines.push(`Total contado: ${counts.total} uds`);
+  if (diff !== null) {
+    lines.push(diff === 0 ? '✓ COINCIDE con albarán' : diff < 0 ? `⚠️ FALTAN ${Math.abs(diff)} uds respecto al albarán` : `ℹ️ SOBRAN ${diff} uds respecto al albarán`);
+  }
+  lines.push(`Método:       Claude Vision AI (claude-sonnet-4-6)`);
+  qs('#odooBlock').textContent = lines.join('\n');
 };
 
 window.copyOdoo = function() {
-  navigator.clipboard.writeText(qs('#odooBlock').textContent).then(()=>{
-    const m=qs('#copiedMsg'); m.style.display='inline';
-    setTimeout(()=>m.style.display='none',2200);
-  });
+  navigator.clipboard.writeText(qs('#odooBlock').textContent)
+    .then(() => showToast('Copiado al portapapeles ✓'));
 };
 
-/* ── calibración por expansión radial ── */
-window.loadCalib = function(e) {
-  const f=e.target.files[0]; if(!f) return;
-  const r=new FileReader();
-  r.onload=ev=>{
-    imgCalib=new Image();
-    imgCalib.onload=()=>{ renderCalibCanvas(); setStatus('statusCalib','Toca el centro de la moneda.'); };
-    imgCalib.src=ev.target.result;
-  };
-  r.readAsDataURL(f);
+/* ══ MÓDULO GRAVIMÉTRICO ══ */
+function initGrav() {
+  const w = JSON.parse(localStorage.getItem('unitWeights') || '{}');
+  if (qs('#w4'))  qs('#w4').value  = w.p4  || UNIT_WEIGHTS.p4;
+  if (qs('#w8'))  qs('#w8').value  = w.p8  || UNIT_WEIGHTS.p8;
+  if (qs('#w12')) qs('#w12').value = w.p12 || UNIT_WEIGHTS.p12;
+}
+
+window.calcGrav = function() {
+  const size=qs('#gravSize').value;
+  const totalW=parseFloat(qs('#gravTotal').value);
+  const tare=parseFloat(qs('#gravTare').value)||0;
+  const w4=parseFloat(qs('#w4').value)||UNIT_WEIGHTS.p4;
+  const w8=parseFloat(qs('#w8').value)||UNIT_WEIGHTS.p8;
+  const w12=parseFloat(qs('#w12').value)||UNIT_WEIGHTS.p12;
+  localStorage.setItem('unitWeights',JSON.stringify({p4:w4,p8:w8,p12:w12}));
+  if(!totalW||totalW<=0){setStatus('statusGrav','Introduce el peso total.');return;}
+  const netW=totalW-tare;
+  if(netW<=0){setStatus('statusGrav','Peso neto 0. Revisa la tara.');return;}
+  const unitW=size==='4'?w4:size==='8'?w8:w12;
+  const qty=Math.round(netW/unitW);
+  counts={c4:size==='4'?qty:0,c8:size==='8'?qty:0,c12:size==='12'?qty:0,total:qty};
+  qs('#gravQty').textContent=qty.toLocaleString('es-ES');
+  qs('#gravNet').textContent=netW.toFixed(3)+' g';
+  qs('#gravUnit').textContent=unitW.toFixed(3)+' g';
+  qs('#gravResult').style.display='block';
+  qs('#exportBoxGrav').style.display='block';
+  buildOdooGrav(size,qty);
+  setStatus('statusGrav',`Resultado: ${qty.toLocaleString('es-ES')} unidades de pellet ${size}mm`);
 };
 
-function renderCalibCanvas() {
-  const canvas=qs('#cvCalib');
-  const maxW=Math.min(window.innerWidth-32,720);
-  let w=imgCalib.naturalWidth,h=imgCalib.naturalHeight;
-  if(w>maxW){h=Math.round(h*maxW/w);w=maxW;}
-  canvas.width=w;canvas.height=h;
-  canvas.getContext('2d').drawImage(imgCalib,0,0,w,h);
-  qs('#wrapCalib').style.display='block';
-  canvas.onclick=onCalibClick;
+function buildOdooGrav(size,qty){
+  const prov=qs('#gExProveedor').value||'—',po=qs('#gExPO').value||'—';
+  const pref=qs('#gExLote').value||'P',ubic=qs('#gExUbic').value||'WH/Stock';
+  const now=new Date();
+  const seq=Math.floor(Math.random()*900)+100;
+  const pad=n=>String(n).padStart(3,'0');
+  const netW=(parseFloat(qs('#gravTotal').value||0)-(parseFloat(qs('#gravTare').value)||0)).toFixed(3);
+  qs('#odooBlockGrav').textContent=[
+    '=== RECEPCIÓN PELLETS (GRAVIMÉTRICO) ===',
+    `Fecha:        ${now.toLocaleDateString('es-ES')}  ${now.toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'})}`,
+    `Proveedor:    ${prov}`,`PO:           ${po}`,`Ubicación:    ${ubic}`,'---',
+    `Pellet ${size}mm   |  Lote: ${pref}-${size}MM-${pad(seq)}  |  Cant: ${qty.toLocaleString('es-ES')}`,
+    '---',`Peso neto:    ${netW} g`,`Método:       báscula de precisión`,
+  ].join('\n');
 }
+window.updateOdooGrav=function(){const size=qs('#gravSize').value;const qty=parseInt(qs('#gravQty').textContent.replace(/\D/g,''))||0;if(qty>0)buildOdooGrav(size,qty);};
+window.copyOdooGrav=function(){navigator.clipboard.writeText(qs('#odooBlockGrav').textContent).then(()=>showToast('Copiado ✓'));};
 
-function onCalibClick(e) {
-  const canvas=qs('#cvCalib');
-  const rect=canvas.getBoundingClientRect();
-  const sx=canvas.width/rect.width, sy=canvas.height/rect.height;
-  const cx=Math.round((e.clientX-rect.left)*sx);
-  const cy=Math.round((e.clientY-rect.top)*sy);
-  setStatus('statusCalib','Midiendo radio de la moneda…');
-
-  const ctx=canvas.getContext('2d');
-  ctx.drawImage(imgCalib,0,0,canvas.width,canvas.height);
-  const data=ctx.getImageData(0,0,canvas.width,canvas.height).data;
-  const w=canvas.width,h=canvas.height;
-
-  const getBr=(x,y)=>{
-    if(x<0||x>=w||y<0||y>=h) return 0;
-    const i=(y*w+x)*4;
-    return (77*data[i]+150*data[i+1]+29*data[i+2])>>8;
-  };
-
-  const cb=getBr(cx,cy);
-  if(cb<40){setStatus('statusCalib','Zona muy oscura. Toca sobre la moneda.');return;}
-
-  const radii=[];
-  for(let i=0;i<48;i++){
-    const a=(2*Math.PI*i)/48;
-    for(let r=3;r<250;r++){
-      const px=Math.round(cx+r*Math.cos(a));
-      const py=Math.round(cy+r*Math.sin(a));
-      if(getBr(px,py)<cb*0.5){radii.push(r);break;}
-    }
-  }
-
-  if(radii.length<12){setStatus('statusCalib','No pude medir. Toca más cerca del centro.');return;}
-  radii.sort((a,b)=>a-b);
-  const medR=radii[Math.floor(radii.length/2)];
-
-  ctx.strokeStyle='#4a9eff';ctx.lineWidth=3;
-  ctx.beginPath();ctx.arc(cx,cy,medR,0,2*Math.PI);ctx.stroke();
-  ctx.fillStyle='#4a9eff';ctx.beginPath();ctx.arc(cx,cy,4,0,2*Math.PI);ctx.fill();
-
-  const pxPerMm=medR/(coinMm/2);
-  calibScale=pxPerMm;
-  const t4=Math.round(pxPerMm*4/2*1.3);
-  const t8=Math.round(pxPerMm*8/2*1.3);
-  const t12=Math.round(pxPerMm*12/2*1.3);
-  calibThresholds={t4,t8,t12};
-
-  qs('#scaleVal').textContent=pxPerMm.toFixed(2);
-  qs('#t4v').textContent=t4;qs('#t8v').textContent=t8;qs('#t12v').textContent=t12;
-  qs('#calibResult').style.display='block';
-  setStatus('statusCalib',`Escala: ${pxPerMm.toFixed(2)} px/mm · radio: ${medR}px · pulsa "Aplicar".`);
-}
-
-window.applyCalib=function(){
-  if(!calibThresholds) return;
-  qs('#p2').value=Math.max(3,Math.round(calibThresholds.t4*0.35));
-  qs('#p3').value=Math.min(300,calibThresholds.t12+20);
-  qs('#v2').textContent=qs('#p2').value;
-  qs('#v3').textContent=qs('#p3').value;
-  const badge=qs('#scaleBadge');
-  badge.textContent=calibScale.toFixed(1)+' px/mm';badge.style.display='inline-block';
-  const info=qs('#calibInfo');
-  info.style.display='block';
-  info.innerHTML=`<strong>Calibración activa</strong> · ${calibScale.toFixed(2)} px/mm · 4mm≤${calibThresholds.t4}px · 8mm≤${calibThresholds.t8}px · 12mm≤${calibThresholds.t12}px`;
-  localStorage.setItem('calibScale',calibScale);
-  localStorage.setItem('calibThresholds',JSON.stringify(calibThresholds));
-  switchTab('count');
-  setStatus('statusCount','Calibración aplicada. Sube foto para contar.');
-};
-
-function restoreCalib(){
-  const sc=localStorage.getItem('calibScale');
-  const th=localStorage.getItem('calibThresholds');
-  if(!sc||!th) return;
-  calibScale=parseFloat(sc);calibThresholds=JSON.parse(th);
-  const badge=qs('#scaleBadge');
-  if(badge){badge.textContent=calibScale.toFixed(1)+' px/mm';badge.style.display='inline-block';}
-  const info=qs('#calibInfo');
-  if(info){info.style.display='block';info.innerHTML=`<strong>Calibración guardada</strong> · ${calibScale.toFixed(2)} px/mm`;}
-  qs('#p2').value=Math.max(3,Math.round(calibThresholds.t4*0.35));
-  qs('#p3').value=Math.min(300,calibThresholds.t12+20);
-  qs('#v2').textContent=qs('#p2').value;
-  qs('#v3').textContent=qs('#p3').value;
-}
-
-/* ── PWA ── */
+/* ══ PWA ══ */
 let deferredPrompt;
-window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();deferredPrompt=e;qs('#installBanner').style.display='flex';});
-qs('#installBtn')&&qs('#installBtn').addEventListener('click',async()=>{
-  if(!deferredPrompt)return;deferredPrompt.prompt();await deferredPrompt.userChoice;
-  deferredPrompt=null;qs('#installBanner').style.display='none';
-});
-if('serviceWorker'in navigator) window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js'));
+window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();deferredPrompt=e;const b=qs('#installBanner');if(b)b.style.display='flex';});
+qs('#installBtn')&&qs('#installBtn').addEventListener('click',async()=>{if(!deferredPrompt)return;deferredPrompt.prompt();await deferredPrompt.userChoice;deferredPrompt=null;qs('#installBanner').style.display='none';});
+if('serviceWorker'in navigator)window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js'));
