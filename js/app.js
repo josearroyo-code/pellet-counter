@@ -1,290 +1,595 @@
-<!DOCTYPE html>
-<html lang="es">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="apple-mobile-web-app-title" content="Pellets">
-  <meta name="theme-color" content="#0e0e0e">
-  <title>Pellet Counter</title>
-  <link rel="manifest" href="manifest.json">
-  <link rel="apple-touch-icon" href="icons/icon-192.png">
-  <style>
-    :root{--bg:#0e0e0e;--surface:#1a1a1a;--surface2:#242424;--border:rgba(255,255,255,0.08);--border2:rgba(255,255,255,0.14);--text:#f0efeb;--muted:#888884;--hint:#555552;--blue:#4a9eff;--blue-dim:#1a3a5c;--green:#3ecf8e;--green-dim:#0e3a26;--orange:#f97316;--orange-dim:#3a1a06;--yellow:#f59e0b;--radius:10px;--radius-lg:14px;--safe-top:env(safe-area-inset-top,0px);--safe-bot:env(safe-area-inset-bottom,0px);}
-    *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
-    html,body{height:100%;background:var(--bg);color:var(--text);font-family:-apple-system,'Segoe UI',sans-serif;font-size:15px;overscroll-behavior:none;}
-    .shell{display:flex;flex-direction:column;height:100dvh;}
-    .topbar{padding:calc(var(--safe-top) + 12px) 16px 12px;border-bottom:0.5px solid var(--border);background:var(--bg);display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:10;}
-    .topbar h1{font-size:15px;font-weight:700;letter-spacing:-0.3px;display:flex;align-items:center;gap:8px;}
-    .ai-badge{font-size:10px;padding:2px 8px;border-radius:20px;background:linear-gradient(135deg,var(--blue-dim),var(--green-dim));color:var(--green);font-weight:700;border:0.5px solid var(--green);}
-    .tabs{display:flex;border-bottom:0.5px solid var(--border);overflow-x:auto;-webkit-overflow-scrolling:touch;}
-    .tab{flex:1;min-width:55px;padding:10px 4px;text-align:center;font-size:11px;font-weight:600;color:var(--muted);background:none;border:none;cursor:pointer;border-bottom:2px solid transparent;white-space:nowrap;position:relative;}
-    .tab.active{color:var(--text);border-bottom-color:var(--blue);}
-    .tab-badge{position:absolute;top:6px;right:8px;background:var(--blue);color:#fff;font-size:9px;padding:1px 5px;border-radius:10px;font-weight:700;}
-    .content{flex:1;overflow-y:auto;padding:14px 14px calc(var(--safe-bot) + 70px);}
-    .panel{display:none;}.panel.active{display:block;}
-    .card{background:var(--surface);border:0.5px solid var(--border);border-radius:var(--radius-lg);padding:14px;margin-bottom:12px;}
-    .card-label{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:0.07em;margin-bottom:10px;font-weight:600;}
-    .upload-zone{border:1.5px dashed var(--border2);border-radius:var(--radius-lg);padding:24px 16px;text-align:center;cursor:pointer;background:var(--surface);margin-bottom:12px;transition:background 0.15s;}
-    .upload-zone:active{background:var(--surface2);}
-    .upload-zone input{display:none;}
-    .upload-zone .uz-icon{font-size:28px;margin-bottom:6px;}
-    .upload-zone p{font-size:14px;font-weight:600;margin-bottom:3px;}
-    .upload-zone span{font-size:12px;color:var(--muted);}
-    .results-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:12px;}
-    .metric{background:var(--surface);border-radius:var(--radius);padding:10px 6px;text-align:center;border:0.5px solid var(--border);}
-    .m-label{font-size:10px;color:var(--muted);margin-bottom:3px;font-weight:600;}
-    .m-value{font-size:20px;font-weight:800;color:var(--text);line-height:1;}
-    .m-sub{font-size:9px;color:var(--hint);margin-top:2px;}
-    .m-blue .m-label{color:var(--blue);} .m-green .m-label{color:var(--green);} .m-orange .m-label{color:var(--orange);} .m-total .m-value{color:var(--green);}
-    .export-box{background:var(--surface);border:0.5px solid var(--border);border-radius:var(--radius-lg);padding:14px;margin-bottom:12px;display:none;}
-    .section-label{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:0.07em;margin-bottom:8px;font-weight:600;}
-    .export-fields{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px;}
-    .export-fields>div label{font-size:10px;color:var(--muted);display:block;margin-bottom:3px;font-weight:600;}
-    .odoo-block{background:var(--surface2);border-radius:var(--radius);padding:10px;font-family:'SF Mono','Fira Code',monospace;font-size:10px;line-height:1.8;color:var(--text);white-space:pre-wrap;margin-bottom:10px;border:0.5px solid var(--border);}
-    .copied-msg{font-size:12px;color:var(--green);display:none;margin-left:8px;}
-    .btn-row{display:flex;gap:8px;flex-wrap:wrap;}
-    button{background:var(--surface2);border:0.5px solid var(--border2);border-radius:var(--radius);color:var(--text);font-size:13px;padding:9px 14px;cursor:pointer;display:inline-flex;align-items:center;gap:5px;font-weight:500;}
-    button:active{background:var(--surface);}
-    button.btn-primary{background:var(--blue-dim);border-color:var(--blue);color:var(--blue);}
-    button.btn-success{background:var(--green-dim);border-color:var(--green);color:var(--green);}
-    button:disabled{opacity:0.4;cursor:not-allowed;}
-    .status-bar{font-size:12px;color:var(--muted);padding:8px 12px;background:var(--surface);border-radius:var(--radius);margin-bottom:10px;display:none;line-height:1.5;}
-    .canvas-wrap{display:none;margin-bottom:12px;border-radius:var(--radius-lg);overflow:hidden;border:0.5px solid var(--border);}
-    .canvas-wrap canvas{width:100%;height:auto;display:block;}
-    input[type=text],input[type=password],input[type=number],textarea,select{background:var(--surface2);border:0.5px solid var(--border2);border-radius:8px;color:var(--text);font-size:13px;padding:8px 10px;width:100%;}
-    select option{background:var(--surface2);}
-    .tip{background:var(--blue-dim);border:0.5px solid rgba(74,158,255,0.15);border-radius:var(--radius);padding:10px 12px;font-size:12px;color:#4a9eff;line-height:1.6;margin-bottom:12px;}
-    .warn{background:var(--orange-dim);border:0.5px solid rgba(249,115,22,0.15);border-radius:var(--radius);padding:10px 12px;font-size:12px;color:var(--orange);line-height:1.6;margin-bottom:12px;}
-    .alb-result{padding:10px 12px;border-radius:var(--radius);font-size:13px;font-weight:600;margin-bottom:12px;display:none;background:var(--surface);}
-    .spinner{display:none;width:18px;height:18px;border:2px solid var(--border2);border-top-color:var(--blue);border-radius:50%;animation:spin 0.7s linear infinite;margin-left:6px;}
-    @keyframes spin{to{transform:rotate(360deg)}}
-    .step{display:flex;gap:10px;margin-bottom:10px;align-items:flex-start;}
-    .step-num{width:22px;height:22px;border-radius:50%;background:var(--surface2);border:0.5px solid var(--border2);font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;color:var(--blue);}
-    .step p{font-size:12px;color:var(--muted);line-height:1.6;margin:0;}
-    .step p strong{color:var(--text);}
-    .coin-select{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;}
-    .coin-btn{padding:6px 12px;font-size:11px;border-radius:var(--radius);border:0.5px solid var(--border2);background:var(--surface);color:var(--muted);cursor:pointer;font-weight:500;}
-    .coin-btn.selected{border-color:var(--blue);color:var(--blue);background:var(--blue-dim);}
-    #installBanner{position:fixed;bottom:calc(var(--safe-bot)+10px);left:12px;right:12px;background:var(--surface2);border:0.5px solid var(--border2);border-radius:var(--radius-lg);padding:12px 14px;display:none;align-items:center;justify-content:space-between;gap:10px;z-index:100;box-shadow:0 8px 32px rgba(0,0,0,0.6);}
-  </style>
-</head>
-<body>
-<div class="shell">
+/* ── Pellet Counter v7.1 — Claude Vision Full ── */
+let imgCount = null;
+let lastImageBase64 = null;
+let lastImageMime = 'image/jpeg';
+let isAnalyzing = false;
+let analysisHistory = [];
+let counts = { c4: 0, c8: 0, c12: 0, total: 0 };
+const UNIT_WEIGHTS = { p4: 0.12, p8: 0.05, p12: 0.12 };
 
-  <div class="topbar">
-    <h1>Pellet Counter <span class="ai-badge">✦ Claude AI</span></h1>
-    <div style="display:flex;align-items:center;gap:8px">
-      <span style="font-size:10px;color:var(--hint);font-family:monospace">v7.1</span>
-      <div id="analyzeSpinner" class="spinner"></div>
+const qs  = s => document.querySelector(s);
+const qsa = s => document.querySelectorAll(s);
+
+document.addEventListener('DOMContentLoaded', () => {
+  restoreSettings();
+  initGrav();
+  loadHistory();
+  updateHistoryBadge();
+  setTimeout(() => { renderProductSelector(); }, 50);
+});
+
+/* ══ SETTINGS ══ */
+/* ══ PERFILES DE PRODUCTO ══ */
+const PROFILES = {
+  '4': {
+    desc: `Electrodos de disco de plata sinterizada de 4mm de diámetro. Son discos circulares MUY PEQUEÑOS, color marrón claro cuando recién llegan del proveedor, puede oscurecerse con la luz, con un hilo fino de conexión saliendo del centro. INSTRUCCIONES CRÍTICAS: estos objetos son extremadamente pequeños y tienden a agruparse. Examina cada zona oscura con detalle — si ves una masa o grupo, asume que hay múltiples discos individuales y cuenta cada punto oscuro circular por separado. Cuenta cada disco individualmente aunque se toquen o solapen. Ignora completamente los hilos, solo cuenta los discos circulares.`,
+    size: 'single', singleSize: '4'
+  },
+  '8': {
+    desc: `Electrodos de disco de plata sinterizada de 8mm de diámetro. Son discos circulares de tamaño mediano, color marrón claro o marrón oscuro dependiendo de la exposición a la luz, con un hilo fino de conexión saliendo del centro. Cuando dos discos se toquen o solapen parcialmente cuenta cada uno como unidad independiente. Si ves zonas con solapamiento cuenta todos los discos visibles individualmente. Ignora completamente los hilos de conexión, solo cuenta los discos circulares.`,
+    size: 'single', singleSize: '8'
+  },
+  '12': {
+    desc: `Electrodos de disco de plata sinterizada de 12mm de diámetro. Son discos circulares GRANDES, color marrón claro o marrón oscuro dependiendo de la exposición a la luz, con un hilo fino de conexión saliendo del centro. Al ser grandes generalmente son fáciles de distinguir individualmente. Cuenta cada disco por separado aunque se toquen en los bordes. Ignora completamente los hilos de conexión, solo cuenta los discos circulares.`,
+    size: 'single', singleSize: '12'
+  },
+  'custom': {
+    desc: localStorage.getItem('productDesc') || '',
+    size: 'single', singleSize: '8'
+  }
+};
+
+window.loadProfile = function(key) {
+  const p = PROFILES[key];
+  if (!p) return;
+
+  /* si es custom, solo activa el botón sin sobreescribir el texto */
+  if (key !== 'custom') {
+    qs('#productDesc').value = p.desc;
+    localStorage.setItem('productDesc', p.desc);
+  }
+
+  /* selector de tamaño */
+  qs('#sizeMode').value = p.size;
+  qs('#singleSizeWrap').style.display = p.size === 'single' ? 'block' : 'none';
+  if (p.singleSize) qs('#singleSize').value = p.singleSize;
+
+  /* resaltar botón activo */
+  ['4','8','12','custom'].forEach(k => {
+    const btn = qs('#prof' + k);
+    if (!btn) return;
+    if (k === key) {
+      btn.style.background = 'var(--blue-dim)';
+      btn.style.borderColor = 'var(--blue)';
+      btn.style.color = 'var(--blue)';
+    } else {
+      btn.style.background = '';
+      btn.style.borderColor = '';
+      btn.style.color = '';
+    }
+  });
+
+  localStorage.setItem('activeProfile', key);
+  showToast(key === 'custom' ? 'Perfil personalizado activo' : `Perfil ${key}mm cargado`);
+};
+
+
+function restoreSettings() {
+  const key = localStorage.getItem('claudeApiKey');
+  if (key && qs('#apiKeyInput')) {
+    qs('#apiKeyInput').value = key;
+    showApiStatus('✓ API key guardada', '#3ecf8e');
+  }
+  const desc = localStorage.getItem('productDesc');
+  if (desc && qs('#productDesc')) qs('#productDesc').value = desc;
+  /* restaurar perfil activo */
+  const activeProfile = localStorage.getItem('activeProfile');
+  if (activeProfile) {
+    setTimeout(() => {
+      const btn = qs('#prof' + activeProfile);
+      if (btn) { btn.style.background='var(--blue-dim)'; btn.style.borderColor='var(--blue)'; btn.style.color='var(--blue)'; }
+    }, 100);
+  }
+  const w = JSON.parse(localStorage.getItem('unitWeights') || '{}');
+  if (qs('#w4'))  qs('#w4').value  = w.p4  || UNIT_WEIGHTS.p4;
+  if (qs('#w8'))  qs('#w8').value  = w.p8  || UNIT_WEIGHTS.p8;
+  if (qs('#w12')) qs('#w12').value = w.p12 || UNIT_WEIGHTS.p12;
+}
+
+function showApiStatus(msg, color) {
+  const el = qs('#apiKeyStatus');
+  if (!el) return;
+  el.textContent = msg;
+  el.style.color = color || '';
+}
+
+window.saveApiKey = function() {
+  const key = qs('#apiKeyInput').value.trim();
+  if (!key.startsWith('sk-ant-')) {
+    showApiStatus('✗ Clave inválida — debe empezar por sk-ant-', '#f97316');
+    return;
+  }
+  localStorage.setItem('claudeApiKey', key);
+  showApiStatus('✓ API key guardada correctamente', '#3ecf8e');
+};
+
+window.toggleApiKey = function() {
+  const inp = qs('#apiKeyInput');
+  inp.type = inp.type === 'password' ? 'text' : 'password';
+};
+
+window.saveProductDesc = function() {
+  const desc = qs('#productDesc').value.trim();
+  localStorage.setItem('productDesc', desc);
+  showToast('Descripción guardada');
+};
+
+function getApiKey() { return localStorage.getItem('claudeApiKey') || ''; }
+
+
+/* ══ SISTEMA DE PRODUCTOS ESCALABLE ══ */
+const DEFAULT_PRODUCTS = {
+  'pellets': {
+    name: 'Pellets electrodo',
+    icon: '⬤',
+    profiles: {
+      '4': `Electrodos de disco de plata sinterizada de 4mm de diámetro. Son discos circulares MUY PEQUEÑOS, color marrón claro o marrón oscuro dependiendo de la exposición a la luz, con un hilo fino de conexión saliendo del centro. INSTRUCCIONES CRÍTICAS: estos objetos son extremadamente pequeños y tienden a agruparse. Examina cada zona oscura con detalle — si ves una masa o grupo, asume que hay múltiples discos individuales y cuenta cada punto oscuro circular por separado. Cuenta cada disco individualmente aunque se toquen o solapen. Ignora completamente los hilos, solo cuenta los discos circulares.`,
+      '8': `Electrodos de disco de plata sinterizada de 8mm de diámetro. Son discos circulares de tamaño mediano, color marrón claro o marrón oscuro dependiendo de la exposición a la luz, con un hilo fino de conexión saliendo del centro. Cuando dos discos se toquen o solapen parcialmente cuenta cada uno como unidad independiente. Si ves zonas con solapamiento cuenta todos los discos visibles individualmente. Ignora completamente los hilos de conexión, solo cuenta los discos circulares.`,
+      '12': `Electrodos de disco de plata sinterizada de 12mm de diámetro. Son discos circulares GRANDES, color marrón claro o marrón oscuro dependiendo de la exposición a la luz, con un hilo fino de conexión saliendo del centro. Al ser grandes generalmente son fáciles de distinguir individualmente. Cuenta cada disco por separado aunque se toquen en los bordes. Ignora completamente los hilos de conexión, solo cuenta los discos circulares.`
+    }
+  }
+};
+
+function getProducts() {
+  const saved = localStorage.getItem('customProducts');
+  const custom = saved ? JSON.parse(saved) : {};
+  return { ...DEFAULT_PRODUCTS, ...custom };
+}
+
+function saveCustomProduct(id, name, icon, desc) {
+  const saved = JSON.parse(localStorage.getItem('customProducts') || '{}');
+  saved[id] = { name, icon, profiles: { custom: desc } };
+  localStorage.setItem('customProducts', JSON.stringify(saved));
+}
+
+window.renderProductSelector = function() {
+  const container = qs('#productSelector');
+  if (!container) return;
+  const products = getProducts();
+  const active = localStorage.getItem('activeProduct') || 'pellets';
+  container.innerHTML = Object.entries(products).map(([id, p]) => `
+    <button onclick="selectProduct('${id}')" style="flex:1;min-width:80px;justify-content:center;flex-direction:column;gap:2px;padding:8px 4px;font-size:11px;${id===active?'background:var(--blue-dim);border-color:var(--blue);color:var(--blue)':''}">
+      <span style="font-size:16px">${p.icon}</span>
+      <span>${p.name}</span>
+    </button>
+  `).join('') + `
+    <button onclick="showAddProduct()" style="flex:1;min-width:60px;justify-content:center;flex-direction:column;gap:2px;padding:8px 4px;font-size:11px;">
+      <span style="font-size:16px">➕</span>
+      <span>Nuevo</span>
+    </button>`;
+};
+
+window.selectProduct = function(id) {
+  localStorage.setItem('activeProduct', id);
+  const products = getProducts();
+  const p = products[id];
+  if (!p) return;
+  /* actualizar perfiles disponibles */
+  const profiles = p.profiles;
+  const firstKey = Object.keys(profiles)[0];
+  if (profiles[firstKey]) {
+    qs('#productDesc').value = profiles[firstKey];
+    localStorage.setItem('productDesc', profiles[firstKey]);
+  }
+  renderProductSelector();
+  /* actualizar botones de perfil según producto */
+  updateProfileButtons(profiles);
+  showToast(`Producto: ${p.name}`);
+};
+
+function updateProfileButtons(profiles) {
+  const profileBar = qs('#profileBar');
+  if (!profileBar) return;
+  const keys = Object.keys(profiles);
+  profileBar.innerHTML = keys.map(k => `
+    <button onclick="loadProfileKey('${k}')" id="prof${k}" style="flex:1;justify-content:center;font-size:12px;padding:7px 4px">${k === 'custom' ? '✏️ Propio' : `● ${k}${k.match(/^\d+$/) ? 'mm' : ''}`}</button>
+  `).join('') + `<button onclick="loadProfile('custom')" style="flex:1;justify-content:center;font-size:12px;padding:7px 4px">✏️</button>`;
+}
+
+window.loadProfileKey = function(key) {
+  const products = getProducts();
+  const activeProduct = localStorage.getItem('activeProduct') || 'pellets';
+  const p = products[activeProduct];
+  if (!p || !p.profiles[key]) return;
+  qs('#productDesc').value = p.profiles[key];
+  localStorage.setItem('productDesc', p.profiles[key]);
+  /* tamaño automático si es número */
+  if (key.match(/^\d+$/)) {
+    qs('#sizeMode').value = 'single';
+    qs('#singleSizeWrap').style.display = 'block';
+    if (['4','8','12'].includes(key)) qs('#singleSize').value = key;
+  }
+  /* resaltar */
+  document.querySelectorAll('#profileBar button').forEach(b => {
+    b.style.background = ''; b.style.borderColor = ''; b.style.color = '';
+  });
+  const btn = qs('#prof' + key);
+  if (btn) { btn.style.background='var(--blue-dim)'; btn.style.borderColor='var(--blue)'; btn.style.color='var(--blue)'; }
+  localStorage.setItem('activeProfile', key);
+  showToast(`Perfil ${key}${key.match(/^\d+$/) ? 'mm' : ''} cargado`);
+};
+
+window.showAddProduct = function() {
+  const name = prompt('Nombre del nuevo producto:');
+  if (!name) return;
+  const icon = prompt('Emoji icono (ej: 🔩 💊 🪙):') || '📦';
+  const desc = prompt('Descripción para la IA (qué debe contar y cómo):');
+  if (!desc) return;
+  const id = 'prod_' + Date.now();
+  saveCustomProduct(id, name, icon, desc);
+  localStorage.setItem('activeProduct', id);
+  renderProductSelector();
+  showToast(`Producto "${name}" añadido`);
+};
+
+
+/* ══ TABS ══ */
+window.switchTab = function(name) {
+  qsa('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
+  qsa('.panel').forEach(p => p.classList.toggle('active', p.id === 'panel-' + name));
+};
+
+/* ══ TOAST ══ */
+function showToast(msg, isError) {
+  let t = qs('#toast');
+  if (!t) { t = document.createElement('div'); t.id = 'toast'; document.body.appendChild(t); }
+  t.textContent = msg;
+  t.style.cssText = `position:fixed;bottom:calc(env(safe-area-inset-bottom,0px) + 80px);left:50%;transform:translateX(-50%);background:${isError?'#3a1a06':'#1a3a2c'};color:${isError?'#f97316':'#3ecf8e'};border:0.5px solid ${isError?'#f97316':'#3ecf8e'};padding:10px 18px;border-radius:20px;font-size:13px;z-index:9999;font-weight:500;pointer-events:none;transition:opacity 0.3s`;
+  t.style.opacity = '1';
+  clearTimeout(t._timer);
+  t._timer = setTimeout(() => t.style.opacity = '0', 2500);
+};
+
+/* ══ HISTORIA ══ */
+function loadHistory() {
+  return JSON.parse(localStorage.getItem('analysisHistory') || '[]');
+}
+function saveHistory(entry) {
+  const h = loadHistory();
+  h.unshift(entry);
+  if (h.length > 50) h.pop();
+  localStorage.setItem('analysisHistory', JSON.stringify(h));
+  updateHistoryBadge();
+  renderHistory();
+}
+function updateHistoryBadge() {
+  const h = loadHistory();
+  const badge = qs('#historyBadge');
+  if (badge) badge.textContent = h.length > 0 ? h.length : '';
+}
+function renderHistory() {
+  const container = qs('#historyList');
+  if (!container) return;
+  const h = loadHistory();
+  if (h.length === 0) {
+    container.innerHTML = '<p style="color:var(--muted);font-size:13px;text-align:center;padding:20px">Sin análisis aún</p>';
+    return;
+  }
+  container.innerHTML = h.map((e, i) => `
+    <div style="background:var(--surface);border:0.5px solid var(--border);border-radius:var(--radius);padding:12px;margin-bottom:10px">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px">
+        <div>
+          <span style="font-size:13px;font-weight:600;color:var(--text)">${e.total} uds</span>
+          <span style="font-size:11px;color:var(--muted);margin-left:8px">${e.date}</span>
+        </div>
+        <span style="font-size:11px;padding:2px 8px;border-radius:10px;background:${e.confidence==='alta'?'var(--green-dim)':e.confidence==='media'?'#2a1f06':'var(--orange-dim)'};color:${e.confidence==='alta'?'#3ecf8e':e.confidence==='media'?'#f59e0b':'#f97316'}">${e.confidence}</span>
+      </div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:6px">${e.product || 'Sin descripción'}</div>
+      ${e.notes ? `<div style="font-size:11px;color:var(--hint);font-style:italic">${e.notes}</div>` : ''}
+      <div style="display:flex;gap:12px;margin-top:8px">
+        ${e.size4>0?`<span style="font-size:12px;color:#4a9eff">4mm: ${e.size4}</span>`:''}
+        ${e.size8>0?`<span style="font-size:12px;color:#3ecf8e">8mm: ${e.size8}</span>`:''}
+        ${e.size12>0?`<span style="font-size:12px;color:#f97316">12mm: ${e.size12}</span>`:''}
+      </div>
+      ${e.odoo ? `<button onclick="copyHistoryEntry(${i})" style="margin-top:8px;padding:6px 12px;font-size:11px">📋 Copiar Odoo</button>` : ''}
     </div>
-  </div>
+  `).join('');
+}
+window.copyHistoryEntry = function(i) {
+  const h = loadHistory();
+  if (h[i]?.odoo) navigator.clipboard.writeText(h[i].odoo).then(() => showToast('Copiado'));
+};
+window.clearHistory = function() {
+  if (!confirm('¿Borrar todo el historial?')) return;
+  localStorage.removeItem('analysisHistory');
+  updateHistoryBadge();
+  renderHistory();
+};
 
-  <div class="tabs">
-    <button class="tab active" data-tab="count"    onclick="switchTab('count')">📷 Contar</button>
-    <button class="tab"        data-tab="grav"     onclick="switchTab('grav')">⚖️ Pesar</button>
-    <button class="tab"        data-tab="history"  onclick="switchTab('history');renderHistory()">🕓 Historial<span class="tab-badge" id="historyBadge"></span></button>
-    <button class="tab"        data-tab="settings" onclick="switchTab('settings')">⚙️</button>
-  </div>
+/* ══ CARGAR IMAGEN ══ */
+window.loadCount = function(e) {
+  const f = e.target.files[0]; if (!f) return;
+  lastImageMime = f.type || 'image/jpeg';
+  const reader = new FileReader();
+  reader.onload = ev => {
+    imgCount = new Image();
+    imgCount.onload = () => {
+      renderCountCanvas();
+      lastImageBase64 = ev.target.result.split(',')[1];
+      qs('#btnRecount').style.display = '';
+      runCountAI();
+    };
+    imgCount.src = ev.target.result;
+  };
+  reader.readAsDataURL(f);
+};
 
-  <div class="content">
+function renderCountCanvas() {
+  const canvas = qs('#cvCount');
+  const maxW = Math.min(window.innerWidth - 32, 800);
+  let w = imgCount.naturalWidth, h = imgCount.naturalHeight;
+  if (w > maxW) { h = Math.round(h * maxW / w); w = maxW; }
+  canvas.width = w; canvas.height = h;
+  canvas.getContext('2d').drawImage(imgCount, 0, 0, w, h);
+  qs('#wrapCount').style.display = 'block';
+}
 
-    <!-- ══ CONTAR ══ -->
-    <div class="panel active" id="panel-count">
+window.rerun = window.runCount = runCountAI;
 
-      <div class="card">
-        <p class="card-label">Producto</p>
-        <div id="productSelector" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px"></div>
-        <p class="card-label" style="margin-top:4px">Perfil de tamaño</p>
-        <div id="profileBar" style="display:flex;gap:6px;margin-bottom:8px">
-          <button onclick="loadProfileKey('4')"  id="prof4"  style="flex:1;justify-content:center;font-size:12px;padding:7px 4px">● 4mm</button>
-          <button onclick="loadProfileKey('8')"  id="prof8"  style="flex:1;justify-content:center;font-size:12px;padding:7px 4px">● 8mm</button>
-          <button onclick="loadProfileKey('12')" id="prof12" style="flex:1;justify-content:center;font-size:12px;padding:7px 4px">● 12mm</button>
-          <button onclick="loadProfile('custom')" id="profCustom" style="flex:1;justify-content:center;font-size:12px;padding:7px 4px">✏️</button>
-        </div>
-        <div style="display:flex;gap:6px;margin-bottom:8px" style="display:none">
-          <button onclick="loadProfile('4')"  id="prof4"  style="flex:1;justify-content:center;font-size:12px;padding:7px 4px">● 4mm</button>
-          <button onclick="loadProfile('8')"  id="prof8"  style="flex:1;justify-content:center;font-size:12px;padding:7px 4px">● 8mm</button>
-          <button onclick="loadProfile('12')" id="prof12" style="flex:1;justify-content:center;font-size:12px;padding:7px 4px">● 12mm</button>
-          <button onclick="loadProfile('custom')" id="profCustom" style="flex:1;justify-content:center;font-size:12px;padding:7px 4px">✏️</button>
-        </div>
-        <textarea id="productDesc" rows="3" placeholder="Selecciona un perfil arriba o escribe tu descripción personalizada" style="resize:none;line-height:1.5;margin-bottom:8px;font-size:12px" oninput="saveProductDesc()"></textarea>
-        <div style="display:flex;gap:8px;flex-wrap:wrap">
-          <select id="sizeMode" style="flex:1;min-width:130px" onchange="qs('#singleSizeWrap').style.display=this.value==='single'?'block':'none'">
-            <option value="single">Un solo tamaño</option>
-            <option value="multi">Clasificar 4/8/12mm</option>
-          </select>
-          <div id="singleSizeWrap" style="min-width:90px">
-            <select id="singleSize" style="width:100%">
-              <option value="4">4 mm</option>
-              <option value="8" selected>8 mm</option>
-              <option value="12">12 mm</option>
-            </select>
-          </div>
-        </div>
-      </div>
+/* ══ CLAUDE VISION ══ */
+async function runCountAI() {
+  if (!lastImageBase64 || isAnalyzing) return;
+  const apiKey = getApiKey();
+  if (!apiKey) {
+    showToast('Introduce tu API key en ⚙️ Ajustes', true);
+    switchTab('settings');
+    return;
+  }
 
-      <div class="card">
-        <p class="card-label">Verificar albarán</p>
-        <div style="display:flex;align-items:center;gap:8px">
-          <input type="number" id="albaranQty" placeholder="Cantidad del albarán" min="0" oninput="buildOdoo()" style="flex:1">
-          <span style="font-size:12px;color:var(--muted)">uds</span>
-        </div>
-        <p style="font-size:11px;color:var(--hint);margin-top:6px">Deja en blanco si no quieres verificar</p>
-      </div>
+  isAnalyzing = true;
+  setStatus('statusCount', '🔍 Claude está analizando la imagen…');
+  qs('#btnRecount').disabled = true;
+  qs('#analyzeSpinner').style.display = 'block';
 
-      <div class="tip">💡 <strong>Sin calibración necesaria.</strong> Cualquier fondo, distancia o iluminación. La IA entiende el contexto como un humano.</div>
+  const productDesc = qs('#productDesc').value.trim() ||
+    'pellets circulares de electrodo sinterizado, discos redondos de color marrón oscuro con un hilo fino saliendo del centro';
+  const sizeMode = qs('#sizeMode').value;
+  const albaranQty = parseInt(qs('#albaranQty').value) || 0;
 
-      <div class="upload-zone" onclick="document.getElementById('fileCount').click()">
-        <input type="file" id="fileCount" accept="image/*" capture="environment" onchange="loadCount(event)">
-        <div class="uz-icon">📸</div>
-        <p>Fotografiar o subir imagen</p>
-        <span>Claude AI detecta y cuenta automáticamente</span>
-      </div>
+  const sizeInstruction = sizeMode === 'single'
+    ? `Todos son del mismo tamaño (${qs('#singleSize').value}mm). Devuelve small=0, large=0 y pon el total en medium.`
+    : `Clasifica por tamaño relativo: pequeños (~4mm) en "small", medianos (~8mm) en "medium", grandes (~12mm) en "large".`;
 
-      <div class="status-bar" id="statusCount"></div>
-      <div class="alb-result" id="albaranResult"></div>
-      <div class="canvas-wrap" id="wrapCount"><canvas id="cvCount"></canvas></div>
+  const prompt = `Eres un sistema experto de conteo industrial con precisión máxima.
 
-      <div id="resultsCount" style="display:none">
-        <div class="results-grid">
-          <div class="metric m-blue"><div class="m-label">4 mm</div><div class="m-value" id="c4">0</div><div class="m-sub">pequeño</div></div>
-          <div class="metric m-green"><div class="m-label">8 mm</div><div class="m-value" id="c8">0</div><div class="m-sub">mediano</div></div>
-          <div class="metric m-orange"><div class="m-label">12 mm</div><div class="m-value" id="c12">0</div><div class="m-sub">grande</div></div>
-          <div class="metric m-total"><div class="m-label">Total</div><div class="m-value" id="cT">0</div><div class="m-sub">todas</div></div>
-        </div>
+Objeto a contar: ${productDesc}
 
-        <div class="export-box" id="exportBox">
-          <p class="section-label">Exportar a Odoo</p>
-          <div class="export-fields">
-            <div><label>Proveedor</label><input type="text" id="exProveedor" placeholder="Nombre" oninput="buildOdoo()"></div>
-            <div><label>Nº PO</label><input type="text" id="exPO" placeholder="PO-2026-XXX" oninput="buildOdoo()"></div>
-            <div><label>Prefijo lote</label><input type="text" id="exLote" placeholder="P-2026" oninput="buildOdoo()"></div>
-            <div><label>Ubicación</label><input type="text" id="exUbic" placeholder="WH/Stock" oninput="buildOdoo()"></div>
-          </div>
-          <p class="section-label">Vista previa</p>
-          <div class="odoo-block" id="odooBlock">—</div>
-          <div class="btn-row">
-            <button class="btn-primary" onclick="copyOdoo()">📋 Copiar para Odoo</button>
-            <span class="copied-msg" id="copiedMsg">✓ Copiado</span>
-          </div>
-        </div>
-      </div>
+${sizeInstruction}
 
-      <div class="btn-row" style="margin-top:10px">
-        <button id="btnRecount" style="display:none" onclick="runCount()">↺ Analizar de nuevo</button>
-      </div>
-    </div>
+REGLAS CRÍTICAS:
+- Cuenta ÚNICAMENTE los objetos descritos. Ignora completamente hilos, cables, algodón, embalaje, fondo y cualquier otro elemento.
+- Si los objetos se tocan o solapan parcialmente, cuenta cada uno individualmente.
+- Incluye objetos parcialmente visibles en bordes si se ve más del 50% del objeto.
+- Si la imagen es borrosa o la iluminación es mala, indícalo en "notes" pero intenta contar igualmente.
+- Sé extremadamente preciso — esta cuenta verifica albaranes comerciales con implicaciones económicas.
 
-    <!-- ══ PESAR ══ -->
-    <div class="panel" id="panel-grav">
-      <div class="card">
-        <p class="card-label">Pesos unitarios (g)</p>
-        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">
-          <div><label style="font-size:10px;color:var(--muted);display:block;margin-bottom:3px;font-weight:600">4mm</label><input type="number" id="w4" value="0.120" step="0.001" min="0.001"></div>
-          <div><label style="font-size:10px;color:var(--muted);display:block;margin-bottom:3px;font-weight:600">8mm</label><input type="number" id="w8" value="0.050" step="0.001" min="0.001"></div>
-          <div><label style="font-size:10px;color:var(--muted);display:block;margin-bottom:3px;font-weight:600">12mm</label><input type="number" id="w12" value="0.120" step="0.001" min="0.001"></div>
-        </div>
-        <p style="font-size:11px;color:var(--hint);margin-top:8px">💡 Pesa 10 pellets ÷ 10 para máxima precisión</p>
-      </div>
-      <div class="card">
-        <p class="card-label">Medición</p>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">
-          <div><label style="font-size:10px;color:var(--muted);display:block;margin-bottom:3px;font-weight:600">Tamaño</label>
-            <select id="gravSize"><option value="4">Pellet 4mm</option><option value="8" selected>Pellet 8mm</option><option value="12">Pellet 12mm</option></select></div>
-          <div><label style="font-size:10px;color:var(--muted);display:block;margin-bottom:3px;font-weight:600">Tara bote vacío (g)</label><input type="number" id="gravTare" placeholder="0.000" step="0.001" min="0"></div>
-          <div style="grid-column:1/-1"><label style="font-size:10px;color:var(--muted);display:block;margin-bottom:3px;font-weight:600">Peso total bote+pellets (g)</label>
-            <input type="number" id="gravTotal" placeholder="0.000" step="0.001" min="0" style="font-size:18px;font-weight:700;padding:10px"></div>
-        </div>
-        <button class="btn-primary" onclick="calcGrav()" style="width:100%;justify-content:center;padding:12px;font-size:14px">⚖️ Calcular unidades</button>
-      </div>
-      <div class="status-bar" id="statusGrav"></div>
-      <div id="gravResult" style="display:none;margin-bottom:12px">
-        <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:12px">
-          <div class="metric m-total" style="grid-column:1/-1"><div class="m-label">Unidades calculadas</div><div class="m-value" id="gravQty" style="font-size:40px">0</div><div class="m-sub">resultado gravimétrico</div></div>
-          <div class="metric"><div class="m-label">Peso neto</div><div class="m-value" id="gravNet" style="font-size:15px">—</div></div>
-          <div class="metric"><div class="m-label">Peso unitario</div><div class="m-value" id="gravUnit" style="font-size:15px">—</div></div>
-        </div>
-        <div class="export-box" id="exportBoxGrav">
-          <p class="section-label">Exportar a Odoo</p>
-          <div class="export-fields">
-            <div><label>Proveedor</label><input type="text" id="gExProveedor" placeholder="Nombre" oninput="updateOdooGrav()"></div>
-            <div><label>Nº PO</label><input type="text" id="gExPO" placeholder="PO-2026-XXX" oninput="updateOdooGrav()"></div>
-            <div><label>Prefijo lote</label><input type="text" id="gExLote" placeholder="P-2026" oninput="updateOdooGrav()"></div>
-            <div><label>Ubicación</label><input type="text" id="gExUbic" placeholder="WH/Stock" oninput="updateOdooGrav()"></div>
-          </div>
-          <p class="section-label">Vista previa</p>
-          <div class="odoo-block" id="odooBlockGrav">—</div>
-          <div class="btn-row"><button class="btn-primary" onclick="copyOdooGrav()">📋 Copiar</button><span class="copied-msg" id="copiedMsgGrav">✓ Copiado</span></div>
-        </div>
-      </div>
-      <div class="warn">⚠️ Pellet 4mm y 12mm tienen el mismo peso (0.12g). Asegúrate de que cada bote es de un solo tamaño antes de pesar.</div>
-    </div>
+Tu respuesta debe ser EXCLUSIVAMENTE el JSON. No escribas ninguna palabra antes ni después. No uses markdown. No expliques nada. Si intentas escribir texto en lugar de JSON el sistema fallará completamente.
 
-    <!-- ══ HISTORIAL ══ -->
-    <div class="panel" id="panel-history">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-        <p style="font-size:13px;font-weight:600;color:var(--text)">Últimos análisis</p>
-        <button onclick="clearHistory()" style="font-size:11px;padding:6px 10px;color:var(--orange);border-color:var(--orange)">🗑 Borrar todo</button>
-      </div>
-      <div id="historyList"></div>
-    </div>
+FORMATO OBLIGATORIO (copia exactamente esta estructura):
+{"small":0,"medium":0,"large":0,"total":0,"confidence":"alta","notes":null}`;
 
-    <!-- ══ AJUSTES ══ -->
-    <div class="panel" id="panel-settings">
-      <div class="card">
-        <p class="card-label">Claude API Key</p>
-        <p style="font-size:12px;color:var(--muted);margin-bottom:10px;line-height:1.6">Guardada solo en este dispositivo. Nunca se envía a ningún servidor excepto Anthropic.</p>
-        <div style="display:flex;gap:6px;margin-bottom:8px">
-          <input type="password" id="apiKeyInput" placeholder="sk-ant-api03-..." style="flex:1;font-family:monospace;font-size:12px">
-          <button onclick="toggleApiKey()" style="padding:8px 10px;flex-shrink:0">👁</button>
-        </div>
-        <button class="btn-primary" onclick="saveApiKey()" style="width:100%;justify-content:center">💾 Guardar API key</button>
-        <p id="apiKeyStatus" style="font-size:12px;margin-top:8px;color:var(--muted)"></p>
-      </div>
-      <div class="card">
-        <p class="card-label">Acerca de</p>
-        <div style="font-size:12px;color:var(--muted);line-height:2">
-          <div><strong style="color:var(--text)">Pellet Counter v7</strong></div>
-          <div>Motor IA: Claude claude-sonnet-4-6 Vision</div>
-          <div>Setup cámara: libre, sin calibración</div>
-          <div>Coste por análisis: ~0.002€</div>
-          <div>Exportación: Odoo (copiar/pegar)</div>
-          <div>Historial: últimos 50 análisis</div>
-          <div>Escalable a cualquier producto</div>
-        </div>
-      </div>
-    </div>
+  try {
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true'
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-6',
+        max_tokens: 300,
+        messages: [{ role: 'user', content: [
+          { type: 'image', source: { type: 'base64', media_type: lastImageMime, data: lastImageBase64 } },
+          { type: 'text', text: prompt }
+        ]}]
+      })
+    });
 
-  </div>
-</div>
+    if (!response.ok) {
+      const err = await response.json();
+      throw new Error(err.error?.message || `HTTP ${response.status}`);
+    }
 
-<div id="installBanner">
-  <div><p style="font-size:13px;font-weight:600">Instalar como app nativa</p><span style="font-size:11px;color:var(--muted)">Funciona sin conexión (excepto análisis IA)</span></div>
-  <button class="btn-primary" id="installBtn" style="flex-shrink:0">Instalar</button>
-</div>
+    const data = await response.json();
+    const rawText = data.content[0].text.trim();
+    // Intentar extraer JSON aunque haya texto alrededor
+    let text = rawText.replace(/```json|```/g, '').trim();
+    // Buscar el JSON dentro del texto si no empieza con {
+    if (!text.startsWith('{')) {
+      const match = text.match(/\{[^{}]*"small"[^{}]*\}/s) || text.match(/\{.*\}/s);
+      if (match) text = match[0];
+      else throw new Error('La IA no devolvió JSON válido. Intenta de nuevo.');
+    }
+    const result = JSON.parse(text);
 
-<script src="js/app.js"></script>
-<div id="splash" style="position:fixed;inset:0;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:9999;transition:opacity 0.4s">
-  <div style="font-size:40px;margin-bottom:16px">⬤</div>
-  <div style="font-size:20px;font-weight:700;color:var(--text);letter-spacing:-0.5px">Pellet Counter</div>
-  <div style="font-size:12px;color:var(--green);font-weight:600;margin-top:6px;display:flex;align-items:center;gap:6px">
-    <span>✦ Claude AI</span>
-    <span style="color:var(--hint)">·</span>
-    <span style="font-family:monospace">v7.1</span>
-  </div>
-  <div style="margin-top:28px;width:48px;height:2px;background:var(--surface2);border-radius:2px;overflow:hidden">
-    <div id="splashBar" style="height:100%;background:var(--green);border-radius:2px;animation:load 1.2s ease-out forwards"></div>
-  </div>
-</div>
-<style>@keyframes load{from{width:0}to{width:100%}}</style>
-<script>
-  setTimeout(() => {
-    const s = document.getElementById('splash');
-    s.style.opacity = '0';
-    setTimeout(() => s.remove(), 400);
-  }, 1400);
-</script>
-</body>
-</html>
+    counts = { c4: result.small||0, c8: result.medium||0, c12: result.large||0, total: result.total||0 };
+    if (sizeMode === 'single') counts.total = result.total || counts.c8;
+
+    /* UI resultados */
+    qs('#c4').textContent  = sizeMode === 'single' ? '—' : counts.c4;
+    qs('#c8').textContent  = sizeMode === 'single' ? counts.total : counts.c8;
+    qs('#c12').textContent = sizeMode === 'single' ? '—' : counts.c12;
+    qs('#cT').textContent  = counts.total;
+
+    /* verificación albarán */
+    if (albaranQty > 0) {
+      const diff = counts.total - albaranQty;
+      const albaranEl = qs('#albaranResult');
+      albaranEl.style.display = 'block';
+      if (diff === 0) {
+        albaranEl.innerHTML = `<span style="color:#3ecf8e">✓ Coincide con albarán (${albaranQty} uds)</span>`;
+      } else if (diff < 0) {
+        albaranEl.innerHTML = `<span style="color:#f97316">⚠️ FALTAN ${Math.abs(diff)} uds respecto al albarán (${albaranQty})</span>`;
+      } else {
+        albaranEl.innerHTML = `<span style="color:#f59e0b">ℹ️ SOBRAN ${diff} uds respecto al albarán (${albaranQty})</span>`;
+      }
+    }
+
+    /* confianza */
+    const confColor = result.confidence==='alta' ? '#3ecf8e' : result.confidence==='media' ? '#f59e0b' : '#f97316';
+    const notesText = result.notes ? ` · ${result.notes}` : '';
+    setStatus('statusCount', `✓ ${counts.total} objetos detectados · Confianza: ${result.confidence}${notesText}`);
+    qs('#statusCount').style.color = confColor;
+
+    /* overlay canvas */
+    drawOverlay(counts.total, result.confidence);
+
+    /* mostrar resultados y export */
+    qs('#resultsCount').style.display = 'block';
+    qs('#exportBox').style.display    = 'block';
+    buildOdoo();
+
+    /* guardar en historial */
+    const now = new Date();
+    saveHistory({
+      date: now.toLocaleDateString('es-ES') + ' ' + now.toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'}),
+      total: counts.total,
+      size4: counts.c4, size8: counts.c8, size12: counts.c12,
+      product: productDesc.slice(0,60),
+      confidence: result.confidence,
+      notes: result.notes,
+      odoo: qs('#odooBlock').textContent
+    });
+
+  } catch(err) {
+    setStatus('statusCount', '✗ Error: ' + err.message, true);
+    qs('#statusCount').style.color = '#f97316';
+    showToast('Error al analizar: ' + err.message, true);
+  } finally {
+    isAnalyzing = false;
+    qs('#btnRecount').disabled = false;
+    qs('#analyzeSpinner').style.display = 'none';
+  }
+}
+
+function drawOverlay(total, confidence) {
+  const canvas = qs('#cvCount');
+  const ctx = canvas.getContext('2d');
+  const confColor = confidence==='alta' ? '#3ecf8e' : confidence==='media' ? '#f59e0b' : '#f97316';
+  ctx.fillStyle = 'rgba(0,0,0,0.65)';
+  ctx.beginPath();
+  if (ctx.roundRect) ctx.roundRect(10,10,170,58,10); else ctx.rect(10,10,170,58);
+  ctx.fill();
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 26px -apple-system,sans-serif';
+  ctx.fillText(`${total} uds`, 20, 44);
+  ctx.font = '12px -apple-system,sans-serif';
+  ctx.fillStyle = confColor;
+  ctx.fillText(`Confianza ${confidence}`, 20, 60);
+}
+
+function setStatus(id, msg, isError) {
+  const el = qs('#' + id);
+  if (!el) return;
+  el.style.display = 'block';
+  el.textContent = msg;
+  el.style.color = isError ? '#f97316' : '';
+}
+
+/* ══ EXPORT ODOO ══ */
+window.buildOdoo = function() {
+  const prov=qs('#exProveedor').value||'—', po=qs('#exPO').value||'—';
+  const pref=qs('#exLote').value||'P', ubic=qs('#exUbic').value||'WH/Stock';
+  const alb=qs('#albaranQty').value||'—';
+  const now=new Date();
+  const fecha=now.toLocaleDateString('es-ES');
+  const hora=now.toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'});
+  const seq=Math.floor(Math.random()*900)+100;
+  const pad=n=>String(n).padStart(3,'0');
+  const sizeMode=qs('#sizeMode').value;
+  const diff = parseInt(qs('#albaranQty').value) > 0 ? counts.total - parseInt(qs('#albaranQty').value) : null;
+  const lines=[
+    '=== RECEPCIÓN DE PELLETS — VERIFICADO IA ===',
+    `Fecha:        ${fecha}  ${hora}`,
+    `Proveedor:    ${prov}`,`PO:           ${po}`,`Ubicación:    ${ubic}`,
+    `Albarán:      ${alb} uds`,
+    '---',
+  ];
+  if(sizeMode==='single'){
+    const sz=qs('#singleSize').value;
+    lines.push(`Pellet ${sz}mm   |  Lote: ${pref}-${sz}MM-${pad(seq)}  |  Cant: ${counts.total}`);
+  } else {
+    if(counts.c4>0)  lines.push(`Pellet  4mm  |  Lote: ${pref}-4MM-${pad(seq)}    |  Cant: ${counts.c4}`);
+    if(counts.c8>0)  lines.push(`Pellet  8mm  |  Lote: ${pref}-8MM-${pad(seq+1)}  |  Cant: ${counts.c8}`);
+    if(counts.c12>0) lines.push(`Pellet 12mm  |  Lote: ${pref}-12MM-${pad(seq+2)} |  Cant: ${counts.c12}`);
+  }
+  lines.push('---');
+  lines.push(`Total contado: ${counts.total} uds`);
+  if (diff !== null) {
+    lines.push(diff === 0 ? '✓ COINCIDE con albarán' : diff < 0 ? `⚠️ FALTAN ${Math.abs(diff)} uds respecto al albarán` : `ℹ️ SOBRAN ${diff} uds respecto al albarán`);
+  }
+  lines.push(`Método:       Claude Vision AI (claude-sonnet-4-6)`);
+  qs('#odooBlock').textContent = lines.join('\n');
+};
+
+window.copyOdoo = function() {
+  navigator.clipboard.writeText(qs('#odooBlock').textContent)
+    .then(() => showToast('Copiado al portapapeles ✓'));
+};
+
+/* ══ MÓDULO GRAVIMÉTRICO ══ */
+function initGrav() {
+  const w = JSON.parse(localStorage.getItem('unitWeights') || '{}');
+  if (qs('#w4'))  qs('#w4').value  = w.p4  || UNIT_WEIGHTS.p4;
+  if (qs('#w8'))  qs('#w8').value  = w.p8  || UNIT_WEIGHTS.p8;
+  if (qs('#w12')) qs('#w12').value = w.p12 || UNIT_WEIGHTS.p12;
+}
+
+window.calcGrav = function() {
+  const size=qs('#gravSize').value;
+  const totalW=parseFloat(qs('#gravTotal').value);
+  const tare=parseFloat(qs('#gravTare').value)||0;
+  const w4=parseFloat(qs('#w4').value)||UNIT_WEIGHTS.p4;
+  const w8=parseFloat(qs('#w8').value)||UNIT_WEIGHTS.p8;
+  const w12=parseFloat(qs('#w12').value)||UNIT_WEIGHTS.p12;
+  localStorage.setItem('unitWeights',JSON.stringify({p4:w4,p8:w8,p12:w12}));
+  if(!totalW||totalW<=0){setStatus('statusGrav','Introduce el peso total.');return;}
+  const netW=totalW-tare;
+  if(netW<=0){setStatus('statusGrav','Peso neto 0. Revisa la tara.');return;}
+  const unitW=size==='4'?w4:size==='8'?w8:w12;
+  const qty=Math.round(netW/unitW);
+  counts={c4:size==='4'?qty:0,c8:size==='8'?qty:0,c12:size==='12'?qty:0,total:qty};
+  qs('#gravQty').textContent=qty.toLocaleString('es-ES');
+  qs('#gravNet').textContent=netW.toFixed(3)+' g';
+  qs('#gravUnit').textContent=unitW.toFixed(3)+' g';
+  qs('#gravResult').style.display='block';
+  qs('#exportBoxGrav').style.display='block';
+  buildOdooGrav(size,qty);
+  setStatus('statusGrav',`Resultado: ${qty.toLocaleString('es-ES')} unidades de pellet ${size}mm`);
+};
+
+function buildOdooGrav(size,qty){
+  const prov=qs('#gExProveedor').value||'—',po=qs('#gExPO').value||'—';
+  const pref=qs('#gExLote').value||'P',ubic=qs('#gExUbic').value||'WH/Stock';
+  const now=new Date();
+  const seq=Math.floor(Math.random()*900)+100;
+  const pad=n=>String(n).padStart(3,'0');
+  const netW=(parseFloat(qs('#gravTotal').value||0)-(parseFloat(qs('#gravTare').value)||0)).toFixed(3);
+  qs('#odooBlockGrav').textContent=[
+    '=== RECEPCIÓN PELLETS (GRAVIMÉTRICO) ===',
+    `Fecha:        ${now.toLocaleDateString('es-ES')}  ${now.toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'})}`,
+    `Proveedor:    ${prov}`,`PO:           ${po}`,`Ubicación:    ${ubic}`,'---',
+    `Pellet ${size}mm   |  Lote: ${pref}-${size}MM-${pad(seq)}  |  Cant: ${qty.toLocaleString('es-ES')}`,
+    '---',`Peso neto:    ${netW} g`,`Método:       báscula de precisión`,
+  ].join('\n');
+}
+window.updateOdooGrav=function(){const size=qs('#gravSize').value;const qty=parseInt(qs('#gravQty').textContent.replace(/\D/g,''))||0;if(qty>0)buildOdooGrav(size,qty);};
+window.copyOdooGrav=function(){navigator.clipboard.writeText(qs('#odooBlockGrav').textContent).then(()=>showToast('Copiado ✓'));};
+
+/* ══ PWA ══ */
+let deferredPrompt;
+window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();deferredPrompt=e;const b=qs('#installBanner');if(b)b.style.display='flex';});
+qs('#installBtn')&&qs('#installBtn').addEventListener('click',async()=>{if(!deferredPrompt)return;deferredPrompt.prompt();await deferredPrompt.userChoice;deferredPrompt=null;qs('#installBanner').style.display='none';});
+if('serviceWorker'in navigator)window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js'));
