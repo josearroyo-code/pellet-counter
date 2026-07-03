@@ -48,6 +48,7 @@
     button{background:var(--surface2);border:0.5px solid var(--border2);border-radius:var(--radius);color:var(--text);font-size:13px;padding:9px 14px;cursor:pointer;display:inline-flex;align-items:center;gap:5px;font-weight:500;}
     button:active{background:var(--surface);}
     button.btn-primary{background:var(--blue-dim);border-color:var(--blue);color:var(--blue);}
+    button.btn-success{background:var(--green-dim);border-color:var(--green);color:var(--green);}
     button:disabled{opacity:0.4;cursor:not-allowed;}
     .status-bar{font-size:12px;color:var(--muted);padding:8px 12px;background:var(--surface);border-radius:var(--radius);margin-bottom:10px;display:none;line-height:1.5;}
     .canvas-wrap{display:none;margin-bottom:12px;border-radius:var(--radius-lg);overflow:hidden;border:0.5px solid var(--border);}
@@ -61,6 +62,13 @@
     @keyframes spin{to{transform:rotate(360deg)}}
     .prof-bar{display:flex;gap:6px;margin-bottom:8px;}
     .prof-bar button{flex:1;justify-content:center;font-size:12px;padding:7px 4px;}
+    /* ── multifoto ── */
+    .multi-panel{background:var(--surface);border:0.5px solid var(--green);border-radius:var(--radius-lg);padding:14px;margin-bottom:12px;display:none;}
+    .multi-total-badge{font-size:32px;font-weight:800;color:var(--green);text-align:center;margin:8px 0;}
+    /* ── ajuste manual ── */
+    .manual-adj{display:none;align-items:center;justify-content:center;gap:16px;margin-bottom:12px;padding:12px;background:var(--surface);border-radius:var(--radius-lg);border:0.5px solid var(--border);}
+    .adj-btn{width:44px;height:44px;border-radius:50%;font-size:22px;font-weight:700;justify-content:center;padding:0;}
+    .adj-label{font-size:12px;color:var(--muted);text-align:center;}
     #installBanner{position:fixed;bottom:calc(var(--safe-bot)+10px);left:12px;right:12px;background:var(--surface2);border:0.5px solid var(--border2);border-radius:var(--radius-lg);padding:12px 14px;display:none;align-items:center;justify-content:space-between;gap:10px;z-index:100;box-shadow:0 8px 32px rgba(0,0,0,0.6);}
     @keyframes load{from{width:0}to{width:100%}}
   </style>
@@ -72,15 +80,15 @@
     <h1>Pellet Counter <span class="ai-badge">✦ Claude AI</span></h1>
     <div style="display:flex;align-items:center;gap:10px">
       <div id="analyzeSpinner" class="spinner"></div>
-      <span class="ver">v7.2</span>
+      <span class="ver">v7.4</span>
     </div>
   </div>
 
   <div class="tabs">
-    <button class="tab active" data-tab="count"   onclick="switchTab('count')">📷 Contar</button>
-    <button class="tab"        data-tab="grav"    onclick="switchTab('grav')">⚖️ Pesar</button>
-    <button class="tab"        data-tab="history" onclick="switchTab('history')">🕓 Historial<span class="tab-badge" id="historyBadge"></span></button>
-    <button class="tab"        data-tab="settings"onclick="switchTab('settings')">⚙️</button>
+    <button class="tab active" data-tab="count"    onclick="switchTab('count')">📷 Contar</button>
+    <button class="tab"        data-tab="grav"     onclick="switchTab('grav')">⚖️ Pesar</button>
+    <button class="tab"        data-tab="history"  onclick="switchTab('history')">🕓 Historial<span class="tab-badge" id="historyBadge"></span></button>
+    <button class="tab"        data-tab="settings" onclick="switchTab('settings')">⚙️</button>
   </div>
 
   <div class="content">
@@ -123,6 +131,37 @@
         <p style="font-size:11px;color:var(--hint);margin-top:5px">Deja vacío si no quieres verificar</p>
       </div>
 
+      <!-- Modo multifoto toggle -->
+      <div style="display:flex;gap:8px;margin-bottom:12px">
+        <button id="btnMultiMode" onclick="toggleMultiMode()" style="flex:1;justify-content:center">📚 Multifoto</button>
+      </div>
+
+      <!-- Panel multifoto -->
+      <div class="multi-panel" id="multiPanel">
+        <p class="card-label">📚 Modo multifoto — grupos de 20-30 pellets</p>
+        <div class="tip" style="margin-bottom:10px">💡 Divide el bote en grupos pequeños bien extendidos. Fotografía cada grupo por separado. La app suma automáticamente.</div>
+
+        <div class="upload-zone" style="padding:16px" onclick="document.getElementById('fileMulti').click()">
+          <input type="file" id="fileMulti" accept="image/*" capture="environment" multiple onchange="addMultiFoto(event)">
+          <div class="uz-icon" style="font-size:22px">📸</div>
+          <p style="font-size:13px">Añadir foto de grupo</p>
+          <span>Puedes añadir varias fotos seguidas</span>
+        </div>
+
+        <div class="status-bar" id="multiStatus" style="display:none"></div>
+        <div id="multiList"></div>
+
+        <div style="text-align:center;margin:8px 0">
+          <div class="m-label">Total acumulado</div>
+          <div class="multi-total-badge" id="multiTotal">0</div>
+          <div class="m-sub">suma de todas las fotos</div>
+        </div>
+
+        <button id="btnMultiConfirm" class="btn-success" onclick="confirmMultiTotal()" style="display:none;width:100%;justify-content:center;padding:12px;font-size:14px">
+          ✓ Confirmar total y exportar a Odoo
+        </button>
+      </div>
+
       <div class="tip">💡 <strong>Sin calibración.</strong> Cualquier fondo, distancia, iluminación. La IA entiende el contexto.</div>
 
       <div class="upload-zone" onclick="document.getElementById('fileCount').click()">
@@ -143,6 +182,14 @@
           <div class="metric m-orange"><div class="m-label">12 mm</div> <div class="m-value" id="c12">0</div> <div class="m-sub">grande</div></div>
           <div class="metric m-total"> <div class="m-label">Total</div> <div class="m-value" id="cT">0</div>  <div class="m-sub">todas</div></div>
         </div>
+
+        <!-- Ajuste manual ±1 -->
+        <div class="manual-adj" id="manualAdj">
+          <button class="adj-btn" onclick="adjustCount(-1)" style="background:var(--orange-dim);border-color:var(--orange);color:var(--orange)">−</button>
+          <div class="adj-label">Corrección<br>manual ±1</div>
+          <button class="adj-btn" onclick="adjustCount(+1)" style="background:var(--green-dim);border-color:var(--green);color:var(--green)">＋</button>
+        </div>
+
         <div class="export-box" id="exportBox">
           <p class="section-label">Exportar a Odoo</p>
           <div class="export-fields">
@@ -240,9 +287,10 @@
       <div class="card">
         <p class="card-label">Acerca de</p>
         <div style="font-size:12px;color:var(--muted);line-height:2.2">
-          <div><strong style="color:var(--text)">Pellet Counter v7.2</strong></div>
+          <div><strong style="color:var(--text)">Pellet Counter v7.4</strong></div>
           <div>Motor IA · Claude Sonnet Vision</div>
-          <div>Setup cámara · libre, sin calibración</div>
+          <div>Multifoto · suma automática de grupos</div>
+          <div>Ajuste manual · ±1 post-análisis</div>
           <div>Perfiles · 4mm / 8mm / 12mm optimizados</div>
           <div>Verificación · albarán automática</div>
           <div>Historial · últimos 50 análisis</div>
@@ -264,14 +312,13 @@
   <button class="btn-primary" id="installBtn" style="flex-shrink:0">Instalar</button>
 </div>
 
-<!-- splash v7.2 -->
+<!-- splash v7.4 -->
 <div id="splash" style="position:fixed;inset:0;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:9999;transition:opacity 0.4s">
   <div style="font-size:44px;margin-bottom:14px">⬤</div>
   <div style="font-size:20px;font-weight:700;color:var(--text);letter-spacing:-0.5px">Pellet Counter</div>
   <div style="font-size:12px;color:var(--green);font-weight:600;margin-top:6px;display:flex;align-items:center;gap:8px">
-    <span>✦ Claude AI</span>
-    <span style="color:var(--hint)">·</span>
-    <span style="font-family:monospace;color:var(--blue)">v7.2</span>
+    <span>✦ Claude AI</span><span style="color:var(--hint)">·</span>
+    <span style="font-family:monospace;color:var(--blue)">v7.4</span>
   </div>
   <div style="margin-top:28px;width:60px;height:2px;background:var(--surface2);border-radius:2px;overflow:hidden">
     <div style="height:100%;background:linear-gradient(90deg,var(--blue),var(--green));border-radius:2px;animation:load 1.3s ease-out forwards"></div>
