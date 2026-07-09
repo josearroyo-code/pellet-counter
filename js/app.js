@@ -1,12 +1,15 @@
 /* ══════════════════════════════════════════
-   Pellet Counter v7.4
-   NUEVO: Modo multifoto con suma automática
-   NUEVO: Ajuste manual ±1 post-análisis
+   Pellet Counter v7.5
+   NUEVO: Doble verificación en foto única — 2 pases
+          con prompts distintos, promedia si difieren ≤2,
+          pide nueva foto si difieren más
+   v7.4:  Modo multifoto con suma automática
+          Ajuste manual ±1 post-análisis
    Fix: columna tamaño correcta en single mode
    Fix: JSON parser robusto
    ══════════════════════════════════════════ */
 
-const VERSION = 'v7.4';
+const VERSION = 'v7.5';
 let lastImageBase64 = null;
 let lastImageMime   = 'image/jpeg';
 let isAnalyzing     = false;
@@ -295,13 +298,15 @@ window.loadCount = function(e) {
 
 window.rerun=window.runCount=runCountAI;
 
+const DOUBLE_CHECK_TOLERANCE = 2;
+
 async function runCountAI() {
   if(!lastImageBase64||isAnalyzing)return;
   const apiKey=getApiKey();
   if(!apiKey){showToast('Introduce tu API key en ⚙️ Ajustes',true);switchTab('settings');return;}
   isAnalyzing=true;
   qs('#analyzeSpinner').style.display='block';qs('#btnRecount').disabled=true;
-  setStatus('statusCount','🔍 Claude está analizando la imagen…');qs('#statusCount').style.color='';
+  setStatus('statusCount','🔍 Claude está analizando la imagen (doble verificación)…');qs('#statusCount').style.color='';
   qs('#albaranResult').style.display='none';qs('#resultsCount').style.display='none';
   qs('#exportBox').style.display='none';qs('#manualAdj').style.display='none';
 
@@ -312,24 +317,32 @@ async function runCountAI() {
     ?`Todos los objetos son del mismo tamaño (${singleSize}mm). Devuelve small=0, large=0 y pon el total en medium.`
     :`Clasifica: pequeños (~4mm) en "small", medianos (~8mm) en "medium", grandes (~12mm) en "large".`;
 
-  const prompt=`Eres un sistema experto de conteo industrial de precisión máxima.
+  const buildPrompt=(reglas)=>`Eres un sistema experto de conteo industrial de precisión máxima.
 
 OBJETO A CONTAR: ${productDesc}
 
 ${sizeInstruction}
 
 REGLAS ABSOLUTAS:
-1. Cuenta ÚNICAMENTE los objetos descritos. Ignora hilos, cables, algodón, fondo, sombras.
-2. Si objetos se tocan o solapan, cuenta cada uno individualmente.
-3. Incluye objetos parcialmente visibles si se ve más del 50%.
-4. Esta cuenta verifica albaranes comerciales — la precisión es crítica económicamente.
+${reglas}
 
 RESPONDE EXCLUSIVAMENTE CON ESTE JSON. CERO palabras antes o después. CERO markdown:
 {"small":0,"medium":0,"large":0,"total":0,"confidence":"alta","notes":null}
 
 Sustituye los 0 por los conteos reales. confidence: "alta" "media" o "baja". notes: string o null.`;
 
-  try {
+  const promptA=buildPrompt(`1. Cuenta ÚNICAMENTE los objetos descritos. Ignora hilos, cables, algodón, fondo, sombras.
+2. Si objetos se tocan o solapan, cuenta cada uno individualmente.
+3. Incluye objetos parcialmente visibles si se ve más del 50%.
+4. Esta cuenta verifica albaranes comerciales — la precisión es crítica económicamente.`);
+
+  const promptB=buildPrompt(`1. Cuenta ÚNICAMENTE los objetos descritos. Ignora hilos, cables, algodón, fondo, sombras.
+2. Divide mentalmente la imagen en una cuadrícula de filas y columnas, cuenta cada celda por separado y luego suma el total.
+3. Si objetos se tocan o solapan, nunca los agrupes como uno solo — cuenta cada uno individualmente.
+4. Incluye objetos parcialmente visibles si se ve más del 50%.
+5. Esta cuenta verifica albaranes comerciales — la precisión es crítica económicamente.`);
+
+  async function callClaude(prompt) {
     const res=await fetch('https://api.anthropic.com/v1/messages',{
       method:'POST',
       headers:{'Content-Type':'application/json','x-api-key':apiKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
@@ -342,9 +355,40 @@ Sustituye los 0 por los conteos reales. confidence: "alta" "media" o "baja". not
     const data=await res.json();
     let text=data.content[0].text.trim().replace(/```json|```/g,'').trim();
     if(!text.startsWith('{')){const m=text.match(/\{[\s\S]*?"total"[\s\S]*?\}/);if(m)text=m[0];else throw new Error('La IA no devolvió JSON. Pulsa "Analizar de nuevo".');}
-    const result=JSON.parse(text);
-    const total=result.total||(result.small||0)+(result.medium||0)+(result.large||0);
+    const r=JSON.parse(text);
+    r.total=r.total||(r.small||0)+(r.medium||0)+(r.large||0);
+    return r;
+  }
 
+  try {
+    const [passA,passB]=await Promise.allSettled([callClaude(promptA),callClaude(promptB)]);
+    const okA=passA.status==='fulfilled'?passA.value:null;
+    const okB=passB.status==='fulfilled'?passB.value:null;
+
+    let result;
+    if(okA&&okB){
+      const diff=Math.abs(okA.total-okB.total);
+      if(diff>DOUBLE_CHECK_TOLERANCE){
+        setStatus('statusCount',`⚠️ Doble verificación no coincide: pase 1 = ${okA.total} uds, pase 2 = ${okB.total} uds (diferencia ${diff}). Vuelve a fotografiar con los pellets más separados.`,'#f97316');
+        showToast('Los dos análisis no coinciden — repite la foto',true);
+        return;
+      }
+      const total=Math.round((okA.total+okB.total)/2);
+      result={
+        small:Math.round(((okA.small||0)+(okB.small||0))/2),
+        medium:Math.round(((okA.medium||0)+(okB.medium||0))/2),
+        large:Math.round(((okA.large||0)+(okB.large||0))/2),
+        total,
+        confidence:'alta',
+        notes:`✓ Doble verificación: pase 1=${okA.total}, pase 2=${okB.total} → promedio ${total}`
+      };
+    } else if(okA||okB){
+      result={...(okA||okB),confidence:'media',notes:((okA||okB).notes?(okA||okB).notes+' · ':'')+'⚠️ solo 1 de los 2 pases de verificación completó'};
+    } else {
+      throw new Error(passA.reason?.message||passB.reason?.message||'Error desconocido');
+    }
+
+    const total=result.total;
     counts={c4:0,c8:0,c12:0,total};
     if(sizeMode==='single'){
       if(singleSize==='4')counts.c4=total;
