@@ -1,15 +1,18 @@
 /* ══════════════════════════════════════════
-   Pellet Counter v7.5
-   NUEVO: Doble verificación en foto única — 2 pases
-          con prompts distintos, promedia si difieren ≤2,
-          pide nueva foto si difieren más
+   Pellet Counter v7.6
+   NUEVO: Botón "Guardar como ejemplo" junto al ±1 —
+          guarda foto + conteo final (post-ajuste) en
+          localStorage como ejemplo de referencia few-shot
+   v7.5:  1 sola llamada API en foto única (coste x1).
+          Si confidence es "media"/"baja", aviso visual
+          destacado para revisar la foto y ajustar ±1.
    v7.4:  Modo multifoto con suma automática
           Ajuste manual ±1 post-análisis
    Fix: columna tamaño correcta en single mode
    Fix: JSON parser robusto
    ══════════════════════════════════════════ */
 
-const VERSION = 'v7.5';
+const VERSION = 'v7.6';
 let lastImageBase64 = null;
 let lastImageMime   = 'image/jpeg';
 let isAnalyzing     = false;
@@ -263,6 +266,7 @@ window.confirmMultiTotal = function() {
   qs('#resultsCount').style.display='block';
   qs('#exportBox').style.display='block';
   qs('#manualAdj').style.display='flex';
+  qs('#btnSaveExample').style.display='none';
   buildOdoo();
   saveHistoryEntry({
     date:new Date().toLocaleDateString('es-ES')+' '+new Date().toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'}),
@@ -298,17 +302,16 @@ window.loadCount = function(e) {
 
 window.rerun=window.runCount=runCountAI;
 
-const DOUBLE_CHECK_TOLERANCE = 2;
-
 async function runCountAI() {
   if(!lastImageBase64||isAnalyzing)return;
   const apiKey=getApiKey();
   if(!apiKey){showToast('Introduce tu API key en ⚙️ Ajustes',true);switchTab('settings');return;}
   isAnalyzing=true;
   qs('#analyzeSpinner').style.display='block';qs('#btnRecount').disabled=true;
-  setStatus('statusCount','🔍 Claude está analizando la imagen (doble verificación)…');qs('#statusCount').style.color='';
+  setStatus('statusCount','🔍 Claude está analizando la imagen…');qs('#statusCount').style.color='';
+  qs('#confWarning').style.display='none';
   qs('#albaranResult').style.display='none';qs('#resultsCount').style.display='none';
-  qs('#exportBox').style.display='none';qs('#manualAdj').style.display='none';
+  qs('#exportBox').style.display='none';qs('#manualAdj').style.display='none';qs('#btnSaveExample').style.display='none';
 
   const productDesc=qs('#productDesc').value.trim()||PELLET_PROFILES['8'];
   const sizeMode=qs('#sizeMode').value,singleSize=qs('#singleSize').value;
@@ -317,30 +320,24 @@ async function runCountAI() {
     ?`Todos los objetos son del mismo tamaño (${singleSize}mm). Devuelve small=0, large=0 y pon el total en medium.`
     :`Clasifica: pequeños (~4mm) en "small", medianos (~8mm) en "medium", grandes (~12mm) en "large".`;
 
-  const buildPrompt=(reglas)=>`Eres un sistema experto de conteo industrial de precisión máxima.
+  const prompt=`Eres un sistema experto de conteo industrial de precisión máxima.
 
 OBJETO A CONTAR: ${productDesc}
 
 ${sizeInstruction}
 
 REGLAS ABSOLUTAS:
-${reglas}
+1. Cuenta ÚNICAMENTE los objetos descritos. Ignora hilos, cables, algodón, fondo, sombras.
+2. Divide mentalmente la imagen en una cuadrícula de filas y columnas, cuenta cada celda por separado y luego suma el total.
+3. Si los objetos se tocan o solapan, nunca los agrupes como uno solo — cuenta cada uno individualmente.
+4. Incluye objetos parcialmente visibles si se ve más del 50%.
+5. Esta cuenta verifica albaranes comerciales — la precisión es crítica económicamente.
+6. Sé honesto con tu propia incertidumbre: si los objetos están muy amontonados, solapados, mal iluminados o hay cualquier duda razonable sobre el conteo exacto, responde confidence "media" o "baja" en vez de "alta".
 
 RESPONDE EXCLUSIVAMENTE CON ESTE JSON. CERO palabras antes o después. CERO markdown:
 {"small":0,"medium":0,"large":0,"total":0,"confidence":"alta","notes":null}
 
 Sustituye los 0 por los conteos reales. confidence: "alta" "media" o "baja". notes: string o null.`;
-
-  const promptA=buildPrompt(`1. Cuenta ÚNICAMENTE los objetos descritos. Ignora hilos, cables, algodón, fondo, sombras.
-2. Si objetos se tocan o solapan, cuenta cada uno individualmente.
-3. Incluye objetos parcialmente visibles si se ve más del 50%.
-4. Esta cuenta verifica albaranes comerciales — la precisión es crítica económicamente.`);
-
-  const promptB=buildPrompt(`1. Cuenta ÚNICAMENTE los objetos descritos. Ignora hilos, cables, algodón, fondo, sombras.
-2. Divide mentalmente la imagen en una cuadrícula de filas y columnas, cuenta cada celda por separado y luego suma el total.
-3. Si objetos se tocan o solapan, nunca los agrupes como uno solo — cuenta cada uno individualmente.
-4. Incluye objetos parcialmente visibles si se ve más del 50%.
-5. Esta cuenta verifica albaranes comerciales — la precisión es crítica económicamente.`);
 
   async function callClaude(prompt) {
     const res=await fetch('https://api.anthropic.com/v1/messages',{
@@ -361,33 +358,7 @@ Sustituye los 0 por los conteos reales. confidence: "alta" "media" o "baja". not
   }
 
   try {
-    const [passA,passB]=await Promise.allSettled([callClaude(promptA),callClaude(promptB)]);
-    const okA=passA.status==='fulfilled'?passA.value:null;
-    const okB=passB.status==='fulfilled'?passB.value:null;
-
-    let result;
-    if(okA&&okB){
-      const diff=Math.abs(okA.total-okB.total);
-      if(diff>DOUBLE_CHECK_TOLERANCE){
-        setStatus('statusCount',`⚠️ Doble verificación no coincide: pase 1 = ${okA.total} uds, pase 2 = ${okB.total} uds (diferencia ${diff}). Vuelve a fotografiar con los pellets más separados.`,'#f97316');
-        showToast('Los dos análisis no coinciden — repite la foto',true);
-        return;
-      }
-      const total=Math.round((okA.total+okB.total)/2);
-      result={
-        small:Math.round(((okA.small||0)+(okB.small||0))/2),
-        medium:Math.round(((okA.medium||0)+(okB.medium||0))/2),
-        large:Math.round(((okA.large||0)+(okB.large||0))/2),
-        total,
-        confidence:'alta',
-        notes:`✓ Doble verificación: pase 1=${okA.total}, pase 2=${okB.total} → promedio ${total}`
-      };
-    } else if(okA||okB){
-      result={...(okA||okB),confidence:'media',notes:((okA||okB).notes?(okA||okB).notes+' · ':'')+'⚠️ solo 1 de los 2 pases de verificación completó'};
-    } else {
-      throw new Error(passA.reason?.message||passB.reason?.message||'Error desconocido');
-    }
-
+    const result=await callClaude(prompt);
     const total=result.total;
     counts={c4:0,c8:0,c12:0,total};
     if(sizeMode==='single'){
@@ -412,8 +383,18 @@ Sustituye los 0 por los conteos reales. confidence: "alta" "media" o "baja". not
     const confColor=result.confidence==='alta'?'#3ecf8e':result.confidence==='media'?'#f59e0b':'#f97316';
     setStatus('statusCount',`✓ ${total} detectados · Confianza: ${result.confidence}${result.notes?' · '+result.notes:''}`);
     qs('#statusCount').style.color=confColor;
+
+    const confWarnEl=qs('#confWarning');
+    if(result.confidence==='media'||result.confidence==='baja'){
+      confWarnEl.style.display='block';
+      confWarnEl.style.color=confColor;
+      confWarnEl.textContent=`⚠️ Confianza ${result.confidence} — revisa la foto y usa ±1 si necesitas ajustar`;
+    } else {
+      confWarnEl.style.display='none';
+    }
+
     drawOverlay(total,result.confidence);
-    qs('#resultsCount').style.display='block';qs('#exportBox').style.display='block';qs('#manualAdj').style.display='flex';
+    qs('#resultsCount').style.display='block';qs('#exportBox').style.display='block';qs('#manualAdj').style.display='flex';qs('#btnSaveExample').style.display='flex';
     buildOdoo();
     saveHistoryEntry({
       date:new Date().toLocaleDateString('es-ES')+' '+new Date().toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'}),
@@ -448,6 +429,30 @@ window.adjustCount = function(delta) {
   } else {counts.c8=Math.max(0,counts.c8+delta);qs('#c8').textContent=counts.c8;}
   qs('#cT').textContent=counts.total;buildOdoo();
   showToast(`Total ajustado: ${counts.total} uds`);
+};
+
+/* ══ EJEMPLOS DE REFERENCIA (few-shot) ══ */
+const MAX_REFERENCE_EXAMPLES = 10;
+window.saveAsExample = function() {
+  if(!lastImageBase64){showToast('No hay foto para guardar',true);return;}
+  const entry={
+    date:new Date().toLocaleDateString('es-ES')+' '+new Date().toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'}),
+    image:lastImageBase64,mime:lastImageMime,
+    total:counts.total,size4:counts.c4,size8:counts.c8,size12:counts.c12,
+    sizeMode:qs('#sizeMode').value,singleSize:qs('#singleSize').value,
+    product:(qs('#productDesc').value||'').slice(0,60)
+  };
+  let examples=JSON.parse(localStorage.getItem('referenceExamples')||'[]');
+  examples.push(entry);
+  while(examples.length>MAX_REFERENCE_EXAMPLES)examples.shift();
+  while(true){
+    try{localStorage.setItem('referenceExamples',JSON.stringify(examples));break;}
+    catch(err){
+      if(examples.length<=1){showToast('No se pudo guardar: almacenamiento lleno',true);return;}
+      examples.shift();
+    }
+  }
+  showToast(`✓ Ejemplo guardado (${examples.length}/${MAX_REFERENCE_EXAMPLES})`);
 };
 
 /* ══ EXPORT ODOO ══ */
