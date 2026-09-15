@@ -1,8 +1,13 @@
 /* ══════════════════════════════════════════
-   Pellet Counter v7.6
-   NUEVO: Botón "Guardar como ejemplo" junto al ±1 —
-          guarda foto + conteo final (post-ajuste) en
-          localStorage como ejemplo de referencia few-shot
+   Pellet Counter v7.6 (cache patch .1)
+   FIX: "Guardar como ejemplo" no hacía nada —
+        ahora redimensiona la foto a 400px antes
+        de guardarla, con toast de éxito/error.
+   NUEVO: pantalla de ejemplos en Ajustes — miniaturas
+          por tamaño, borrar individual o por tamaño.
+   NUEVO: few-shot conectado — cada análisis (foto única
+          y cada foto de multifoto) incluye automáticamente
+          los 2 ejemplos más recientes del mismo tamaño.
    v7.5:  1 sola llamada API en foto única (coste x1).
           Si confidence es "media"/"baja", aviso visual
           destacado para revisar la foto y ajustar ±1.
@@ -60,6 +65,7 @@ window.switchTab = function(name) {
   qsa('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
   qsa('.panel').forEach(p => p.classList.toggle('active', p.id === 'panel-' + name));
   if (name === 'history') renderHistory();
+  if (name === 'settings') renderExamplesSettings();
 };
 
 /* ══ SETTINGS ══ */
@@ -212,6 +218,10 @@ async function analyzeOneFoto(entry) {
   if(!apiKey){entry.analyzing=false;entry.result={total:0,confidence:'baja',notes:'Sin API key'};renderMultiList();updateMultiTotal();return;}
   const productDesc=qs('#productDesc').value.trim()||PELLET_PROFILES['8'];
   const singleSize=qs('#singleSize').value;
+  const fewShotCount=getReferenceExamples().filter(e=>e.size===singleSize).slice(-2).length;
+  const fewShotNote=fewShotCount>0
+    ?`\nNOTA: antes de la foto a analizar se incluyen ${fewShotCount} imagen(es) de referencia con su conteo ya confirmado por texto. Son solo contexto de calibración — NO las cuentes. La imagen a contar es la ÚLTIMA, justo antes de este texto.\n`
+    :'';
   const prompt=`Eres un sistema experto de conteo industrial de precisión máxima.
 
 OBJETO A CONTAR: ${productDesc}
@@ -219,17 +229,19 @@ OBJETO A CONTAR: ${productDesc}
 Esta es UNA PARTE de un bote más grande dividido en grupos de 20-30 pellets para mayor precisión. Cuenta ÚNICAMENTE los pellets visibles en ESTA foto.
 
 Todos son del mismo tamaño (${singleSize}mm). Devuelve small=0, large=0 y pon el total en medium.
-
+${fewShotNote}
 REGLAS: ignora hilos, fondo, sombras. Si se tocan cuenta cada uno individualmente. Precisión crítica.
 
 RESPONDE EXCLUSIVAMENTE CON ESTE JSON, CERO texto adicional:
 {"small":0,"medium":0,"large":0,"total":0,"confidence":"alta","notes":null}`;
 
   try {
+    const fewShot=buildFewShotBlocks(singleSize);
     const res=await fetch('https://api.anthropic.com/v1/messages',{
       method:'POST',
       headers:{'Content-Type':'application/json','x-api-key':apiKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
       body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:200,messages:[{role:'user',content:[
+        ...fewShot,
         {type:'image',source:{type:'base64',media_type:entry.mime,data:entry.base64}},
         {type:'text',text:prompt}
       ]}]})
@@ -319,13 +331,17 @@ async function runCountAI() {
   const sizeInstruction=sizeMode==='single'
     ?`Todos los objetos son del mismo tamaño (${singleSize}mm). Devuelve small=0, large=0 y pon el total en medium.`
     :`Clasifica: pequeños (~4mm) en "small", medianos (~8mm) en "medium", grandes (~12mm) en "large".`;
+  const fewShotCount=sizeMode==='single'?getReferenceExamples().filter(e=>e.size===singleSize).slice(-2).length:0;
+  const fewShotNote=fewShotCount>0
+    ?`\nNOTA: antes de la foto a analizar se incluyen ${fewShotCount} imagen(es) de referencia, cada una con su conteo ya confirmado indicado por texto. Son solo contexto de calibración de escala/densidad — NO las cuentes. La imagen que debes contar es la ÚLTIMA imagen, la que aparece justo antes de este texto.\n`
+    :'';
 
   const prompt=`Eres un sistema experto de conteo industrial de precisión máxima.
 
 OBJETO A CONTAR: ${productDesc}
 
 ${sizeInstruction}
-
+${fewShotNote}
 REGLAS ABSOLUTAS:
 1. Cuenta ÚNICAMENTE los objetos descritos. Ignora hilos, cables, algodón, fondo, sombras.
 2. Divide mentalmente la imagen en una cuadrícula de filas y columnas, cuenta cada celda por separado y luego suma el total.
@@ -340,10 +356,12 @@ RESPONDE EXCLUSIVAMENTE CON ESTE JSON. CERO palabras antes o después. CERO mark
 Sustituye los 0 por los conteos reales. confidence: "alta" "media" o "baja". notes: string o null.`;
 
   async function callClaude(prompt) {
+    const fewShot=sizeMode==='single'?buildFewShotBlocks(singleSize):[];
     const res=await fetch('https://api.anthropic.com/v1/messages',{
       method:'POST',
       headers:{'Content-Type':'application/json','x-api-key':apiKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
       body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:300,messages:[{role:'user',content:[
+        ...fewShot,
         {type:'image',source:{type:'base64',media_type:lastImageMime,data:lastImageBase64}},
         {type:'text',text:prompt}
       ]}]})
@@ -433,26 +451,118 @@ window.adjustCount = function(delta) {
 
 /* ══ EJEMPLOS DE REFERENCIA (few-shot) ══ */
 const MAX_REFERENCE_EXAMPLES = 10;
-window.saveAsExample = function() {
-  if(!lastImageBase64){showToast('No hay foto para guardar',true);return;}
-  const entry={
-    date:new Date().toLocaleDateString('es-ES')+' '+new Date().toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'}),
-    image:lastImageBase64,mime:lastImageMime,
-    total:counts.total,size4:counts.c4,size8:counts.c8,size12:counts.c12,
-    sizeMode:qs('#sizeMode').value,singleSize:qs('#singleSize').value,
-    product:(qs('#productDesc').value||'').slice(0,60)
-  };
-  let examples=JSON.parse(localStorage.getItem('referenceExamples')||'[]');
-  examples.push(entry);
-  while(examples.length>MAX_REFERENCE_EXAMPLES)examples.shift();
-  while(true){
-    try{localStorage.setItem('referenceExamples',JSON.stringify(examples));break;}
-    catch(err){
-      if(examples.length<=1){showToast('No se pudo guardar: almacenamiento lleno',true);return;}
+const EXAMPLE_MAX_DIM = 400;
+
+function resizeImageBase64(base64, mime, maxDim) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      let w = img.naturalWidth, h = img.naturalHeight;
+      if (w > maxDim || h > maxDim) {
+        if (w >= h) { h = Math.round(h * maxDim / w); w = maxDim; }
+        else { w = Math.round(w * maxDim / h); h = maxDim; }
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = h;
+      canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+      try {
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.72);
+        resolve({ base64: dataUrl.split(',')[1], mime: 'image/jpeg' });
+      } catch (err) { reject(err); }
+    };
+    img.onerror = () => reject(new Error('No se pudo procesar la imagen'));
+    img.src = `data:${mime};base64,${base64}`;
+  });
+}
+
+function getReferenceExamples() {
+  try { return JSON.parse(localStorage.getItem('referenceExamples') || '[]'); }
+  catch (err) { return []; }
+}
+
+function buildFewShotBlocks(size) {
+  if(!size) return [];
+  const recent=getReferenceExamples().filter(e=>e.size===size).slice(-2);
+  return recent.flatMap((ex,i)=>[
+    {type:'text',text:`Ejemplo de referencia confirmado #${i+1}: esta foto contiene EXACTAMENTE ${ex.total} unidades de ${ex.size}mm. Úsala como referencia de escala y densidad visual para el conteo que viene a continuación.`},
+    {type:'image',source:{type:'base64',media_type:ex.mime,data:ex.image}}
+  ]);
+}
+
+function persistReferenceExamples(examples) {
+  while (true) {
+    try { localStorage.setItem('referenceExamples', JSON.stringify(examples)); return true; }
+    catch (err) {
+      if (examples.length === 0) return false;
       examples.shift();
     }
   }
-  showToast(`✓ Ejemplo guardado (${examples.length}/${MAX_REFERENCE_EXAMPLES})`);
+}
+
+window.saveAsExample = async function() {
+  if(!lastImageBase64){showToast('No hay foto para guardar',true);return;}
+  try {
+    const resized = await resizeImageBase64(lastImageBase64, lastImageMime, EXAMPLE_MAX_DIM);
+    const sizeMode = qs('#sizeMode').value, singleSize = qs('#singleSize').value;
+    const entry = {
+      id: Date.now() + '_' + Math.random().toString(36).slice(2, 7),
+      date: new Date().toLocaleDateString('es-ES') + ' ' + new Date().toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' }),
+      image: resized.base64, mime: resized.mime,
+      total: counts.total, size4: counts.c4, size8: counts.c8, size12: counts.c12,
+      size: sizeMode === 'single' ? singleSize : null,
+      product: (qs('#productDesc').value || '').slice(0, 60)
+    };
+    let examples = getReferenceExamples();
+    examples.push(entry);
+    while (examples.length > MAX_REFERENCE_EXAMPLES) examples.shift();
+    if (!persistReferenceExamples(examples)) { showToast('No se pudo guardar: almacenamiento lleno', true); return; }
+    showToast('Ejemplo guardado ✓');
+    renderExamplesSettings();
+  } catch (err) {
+    showToast('Error al guardar ejemplo: ' + err.message, true);
+  }
+};
+
+window.deleteExample = function(id) {
+  const examples = getReferenceExamples().filter(e => e.id !== id);
+  if (!persistReferenceExamples(examples)) { showToast('Error al borrar',true); return; }
+  renderExamplesSettings();
+  showToast('Ejemplo borrado');
+};
+
+window.deleteExamplesBySize = function(size) {
+  if (!confirm(`¿Borrar todos los ejemplos de ${size}mm?`)) return;
+  const examples = getReferenceExamples().filter(e => e.size !== size);
+  persistReferenceExamples(examples);
+  renderExamplesSettings();
+  showToast(`Ejemplos de ${size}mm borrados`);
+};
+
+window.renderExamplesSettings = function() {
+  const el = qs('#examplesSettings'); if (!el) return;
+  const examples = getReferenceExamples();
+  if (examples.length === 0) {
+    el.innerHTML = '<p style="color:var(--muted);font-size:12px;text-align:center;padding:16px">Sin ejemplos guardados aún. Tras un análisis en la pestaña Contar, usa "✓ Guardar como ejemplo".</p>';
+    return;
+  }
+  const groups = { '4': [], '8': [], '12': [], other: [] };
+  examples.forEach(e => { (groups[e.size] || groups.other).push(e); });
+  const sizeLabel = { '4': '4mm', '8': '8mm', '12': '12mm', other: 'Sin tamaño único (modo clasificar)' };
+  el.innerHTML = ['4', '8', '12', 'other'].filter(k => groups[k].length > 0).map(k => `
+    <div style="margin-bottom:14px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+        <span style="font-size:12px;font-weight:700">${sizeLabel[k]} · ${groups[k].length} ejemplo${groups[k].length>1?'s':''}</span>
+        ${k!=='other'?`<button onclick="deleteExamplesBySize('${k}')" style="font-size:10px;padding:4px 8px;color:var(--orange);border-color:var(--orange)">🗑 Borrar todos</button>`:''}
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        ${groups[k].map(e => `
+          <div style="position:relative;width:64px">
+            <img src="data:${e.mime};base64,${e.image}" style="width:64px;height:64px;object-fit:cover;border-radius:8px;border:0.5px solid var(--border);display:block">
+            <div style="font-size:10px;text-align:center;color:var(--muted);margin-top:2px">${e.total} uds</div>
+            <button onclick="deleteExample('${e.id}')" style="position:absolute;top:-6px;right:-6px;width:20px;height:20px;padding:0;border-radius:50%;font-size:10px;line-height:1;background:var(--orange-dim);border-color:var(--orange);color:var(--orange);display:flex;align-items:center;justify-content:center">✕</button>
+          </div>`).join('')}
+      </div>
+    </div>`).join('');
 };
 
 /* ══ EXPORT ODOO ══ */

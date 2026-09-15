@@ -290,12 +290,18 @@
         <p id="apiKeyStatus" style="font-size:12px;margin-top:8px;color:var(--muted)"></p>
       </div>
       <div class="card">
+        <p class="card-label">Ejemplos guardados (few-shot)</p>
+        <p style="font-size:11px;color:var(--hint);margin-bottom:10px;line-height:1.5">Se usan automáticamente como referencia en el próximo análisis del mismo tamaño (los 2 más recientes).</p>
+        <div id="examplesSettings"></div>
+      </div>
+      <div class="card">
         <p class="card-label">Acerca de</p>
         <div style="font-size:12px;color:var(--muted);line-height:2.2">
           <div><strong style="color:var(--text)">Pellet Counter v7.6</strong></div>
           <div>Motor IA · Claude Sonnet Vision</div>
           <div>Autoevaluación de confianza · aviso si es media/baja</div>
-          <div>Guardar ejemplo · foto + conteo final para referencia few-shot</div>
+          <div>Guardar ejemplo · foto (400px) + conteo final, gestionable en Ajustes</div>
+          <div>Few-shot automático · usa los 2 ejemplos más recientes del mismo tamaño</div>
           <div>Multifoto · suma automática de grupos</div>
           <div>Ajuste manual · ±1 post-análisis</div>
           <div>Perfiles · 4mm / 8mm / 12mm optimizados</div>
@@ -303,7 +309,7 @@
           <div>Historial · últimos 50 análisis</div>
           <div>Gravimétrico · báscula de precisión</div>
           <div>Escalable · añade cualquier producto</div>
-          <div>Coste por análisis (foto única) · ~0.002€</div>
+          <div>Coste por análisis (foto única, sin ejemplos) · ~0.002€</div>
         </div>
       </div>
     </div>
