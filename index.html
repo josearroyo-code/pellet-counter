@@ -11,7 +11,7 @@
   <link rel="manifest" href="manifest.json">
   <link rel="apple-touch-icon" href="icons/icon-192.png">
   <style>
-    :root{--bg:#0e0e0e;--surface:#1a1a1a;--surface2:#242424;--border:rgba(255,255,255,0.08);--border2:rgba(255,255,255,0.16);--text:#f0efeb;--muted:#888884;--hint:#555552;--blue:#4a9eff;--blue-dim:#1a3a5c;--green:#3ecf8e;--green-dim:#0e3a26;--orange:#f97316;--orange-dim:#3a1a06;--radius:10px;--radius-lg:14px;--safe-top:env(safe-area-inset-top,0px);--safe-bot:env(safe-area-inset-bottom,0px);}
+    :root{--bg:#0e0e0e;--surface:#1a1a1a;--surface2:#242424;--border:rgba(255,255,255,0.08);--border2:rgba(255,255,255,0.16);--text:#f0efeb;--muted:#888884;--hint:#555552;--blue:#4a9eff;--blue-dim:#1a3a5c;--green:#3ecf8e;--green-dim:#0e3a26;--orange:#f97316;--orange-dim:#3a1a06;--red:#ef4444;--red-dim:#3a0f0f;--radius:10px;--radius-lg:14px;--safe-top:env(safe-area-inset-top,0px);--safe-bot:env(safe-area-inset-bottom,0px);}
     *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
     html,body{height:100%;background:var(--bg);color:var(--text);font-family:-apple-system,'Segoe UI',sans-serif;font-size:15px;overscroll-behavior:none;}
     .shell{display:flex;flex-direction:column;height:100dvh;}
@@ -71,6 +71,34 @@
     .adj-label{font-size:12px;color:var(--muted);text-align:center;}
     #installBanner{position:fixed;bottom:calc(var(--safe-bot)+10px);left:12px;right:12px;background:var(--surface2);border:0.5px solid var(--border2);border-radius:var(--radius-lg);padding:12px 14px;display:none;align-items:center;justify-content:space-between;gap:10px;z-index:100;box-shadow:0 8px 32px rgba(0,0,0,0.6);}
     @keyframes load{from{width:0}to{width:100%}}
+
+    /* ── subbar contador de ejemplos ── */
+    .subbar{padding:6px 16px;font-family:'SF Mono','Fira Code',monospace;font-size:10.5px;color:var(--hint);border-bottom:0.5px solid var(--border);background:var(--bg);display:flex;gap:12px;flex-wrap:wrap;}
+    .subbar .ok{color:var(--green);font-weight:700;}
+
+    /* ── modo zonas ── */
+    .canvas-wrap{position:relative;}
+    .zone-overlay{position:absolute;inset:0;display:grid;}
+    .zone-cell{position:relative;display:flex;align-items:center;justify-content:center;border:1px solid rgba(255,255,255,.32);box-sizing:border-box;}
+    .zone-cell.zone-max{border:2px solid var(--orange);}
+    .zone-badge{background:rgba(0,0,0,.72);color:#fff;font-weight:800;font-size:15px;padding:4px 10px;border-radius:8px;line-height:1;}
+
+    /* ── barra comparación albarán ── */
+    .alb-bar{display:none;flex-direction:column;gap:6px;margin-bottom:12px;font-size:11px;}
+    .alb-row{display:flex;align-items:center;gap:8px;}
+    .alb-label{width:56px;flex-shrink:0;color:var(--muted);font-weight:700;}
+    .alb-track{flex:1;height:10px;background:var(--surface2);border-radius:6px;overflow:hidden;}
+    .alb-fill{height:100%;border-radius:6px;background:var(--muted);transition:width .35s ease;}
+    .alb-fill.alb-ref{background:var(--border2);}
+    .alb-num{width:70px;flex-shrink:0;text-align:right;font-family:'SF Mono','Fira Code',monospace;font-weight:700;font-size:11px;}
+
+    /* ── landscape: foto izq / controles der ── */
+    .count-layout{display:flex;flex-direction:column;}
+    @media (orientation:landscape) and (min-width:600px){
+      .count-layout{flex-direction:row;align-items:flex-start;gap:16px;}
+      .count-left{order:1;flex:0 0 55%;max-width:55%;}
+      .count-right{order:2;flex:0 0 45%;max-width:45%;}
+    }
   </style>
 </head>
 <body>
@@ -80,9 +108,10 @@
     <h1>Pellet Counter <span class="ai-badge">✦ Claude AI</span></h1>
     <div style="display:flex;align-items:center;gap:10px">
       <div id="analyzeSpinner" class="spinner"></div>
-      <span class="ver">v7.6</span>
+      <span class="ver">v7.7</span>
     </div>
   </div>
+  <div class="subbar" id="exCounts"></div>
 
   <div class="tabs">
     <button class="tab active" data-tab="count"    onclick="switchTab('count')">📷 Contar</button>
@@ -95,6 +124,9 @@
 
     <!-- ══ CONTAR ══ -->
     <div class="panel active" id="panel-count">
+    <div class="count-layout">
+
+      <div class="count-right">
 
       <div class="card">
         <p class="card-label">Producto</p>
@@ -164,6 +196,10 @@
 
       <div class="tip">💡 <strong>Sin calibración.</strong> Cualquier fondo, distancia, iluminación. La IA entiende el contexto.</div>
 
+      </div>
+
+      <div class="count-left">
+
       <div class="upload-zone" onclick="document.getElementById('fileCount').click()">
         <input type="file" id="fileCount" accept="image/*" capture="environment" onchange="loadCount(event)">
         <div class="uz-icon">📸</div>
@@ -174,7 +210,7 @@
       <div class="status-bar" id="statusCount"></div>
       <div class="warn" id="confWarning" style="display:none;font-weight:700"></div>
       <div class="alb-result"  id="albaranResult"></div>
-      <div class="canvas-wrap" id="wrapCount"><canvas id="cvCount"></canvas></div>
+      <div class="canvas-wrap" id="wrapCount"><canvas id="cvCount"></canvas><div id="zoneOverlay" class="zone-overlay" hidden></div></div>
 
       <div id="resultsCount" style="display:none">
         <div class="results-grid">
@@ -182,6 +218,12 @@
           <div class="metric m-green"> <div class="m-label">8 mm</div>  <div class="m-value" id="c8">0</div>  <div class="m-sub">mediano</div></div>
           <div class="metric m-orange"><div class="m-label">12 mm</div> <div class="m-value" id="c12">0</div> <div class="m-sub">grande</div></div>
           <div class="metric m-total"> <div class="m-label">Total</div> <div class="m-value" id="cT">0</div>  <div class="m-sub">todas</div></div>
+        </div>
+
+        <!-- Barra comparación albarán -->
+        <div class="alb-bar" id="albaranBar">
+          <div class="alb-row"><span class="alb-label">Albarán</span><div class="alb-track"><div class="alb-fill alb-ref" id="albBarRef" style="width:100%"></div></div><span class="alb-num" id="albBarRefNum">—</span></div>
+          <div class="alb-row"><span class="alb-label">Contado</span><div class="alb-track"><div class="alb-fill" id="albBarCounted" style="width:0%"></div></div><span class="alb-num" id="albBarCountedNum">—</span></div>
         </div>
 
         <!-- Ajuste manual ±1 -->
@@ -212,8 +254,13 @@
       </div>
 
       <div class="btn-row" style="margin-top:10px">
+        <button id="btnZones" style="display:none" onclick="toggleZones()">⊞ Zonas</button>
         <button id="btnRecount" style="display:none" onclick="runCount()">↺ Analizar de nuevo</button>
       </div>
+
+      </div>
+
+    </div>
     </div>
 
     <!-- ══ PESAR ══ -->
@@ -297,8 +344,13 @@
       <div class="card">
         <p class="card-label">Acerca de</p>
         <div style="font-size:12px;color:var(--muted);line-height:2.2">
-          <div><strong style="color:var(--text)">Pellet Counter v7.6</strong></div>
+          <div><strong style="color:var(--text)">Pellet Counter v7.7</strong></div>
           <div>Motor IA · Claude Sonnet Vision</div>
+          <div>Modo zonas · subtotales por cuadrante, sin llamada extra</div>
+          <div>Barra albarán · comparación visual verde/naranja/rojo</div>
+          <div>Contador few-shot · en la barra superior, por tamaño</div>
+          <div>Vibración + pantalla activa · durante el análisis (móvil)</div>
+          <div>Modo horizontal · foto y controles lado a lado</div>
           <div>Autoevaluación de confianza · aviso si es media/baja</div>
           <div>Guardar ejemplo · foto (400px) + conteo final, gestionable en Ajustes</div>
           <div>Few-shot automático · usa los 2 ejemplos más recientes del mismo tamaño</div>
@@ -325,13 +377,13 @@
   <button class="btn-primary" id="installBtn" style="flex-shrink:0">Instalar</button>
 </div>
 
-<!-- splash v7.6 -->
+<!-- splash v7.7 -->
 <div id="splash" style="position:fixed;inset:0;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:9999;transition:opacity 0.4s">
   <div style="font-size:44px;margin-bottom:14px">⬤</div>
   <div style="font-size:20px;font-weight:700;color:var(--text);letter-spacing:-0.5px">Pellet Counter</div>
   <div style="font-size:12px;color:var(--green);font-weight:600;margin-top:6px;display:flex;align-items:center;gap:8px">
     <span>✦ Claude AI</span><span style="color:var(--hint)">·</span>
-    <span style="font-family:monospace;color:var(--blue)">v7.6</span>
+    <span style="font-family:monospace;color:var(--blue)">v7.7</span>
   </div>
   <div style="margin-top:28px;width:60px;height:2px;background:var(--surface2);border-radius:2px;overflow:hidden">
     <div style="height:100%;background:linear-gradient(90deg,var(--blue),var(--green));border-radius:2px;animation:load 1.3s ease-out forwards"></div>

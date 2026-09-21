@@ -1,13 +1,19 @@
 /* ══════════════════════════════════════════
-   Pellet Counter v7.6 (cache patch .1)
-   FIX: "Guardar como ejemplo" no hacía nada —
-        ahora redimensiona la foto a 400px antes
-        de guardarla, con toast de éxito/error.
-   NUEVO: pantalla de ejemplos en Ajustes — miniaturas
-          por tamaño, borrar individual o por tamaño.
-   NUEVO: few-shot conectado — cada análisis (foto única
-          y cada foto de multifoto) incluye automáticamente
-          los 2 ejemplos más recientes del mismo tamaño.
+   Pellet Counter v7.7
+   NUEVO: Modo zonas — divide la foto en cuadrantes
+          (2x2 / 3x3 según cantidad) con subtotal
+          proporcional por área, sin llamada extra a la API.
+   NUEVO: Barra visual de comparación con el albarán.
+   NUEVO: Contador de ejemplos few-shot por tamaño en la
+          barra superior, con aviso al llegar a 5.
+   NUEVO: Vibración al completar el análisis (móvil).
+   NUEVO: WakeLock — evita que la pantalla se apague
+          mientras Claude analiza.
+   NUEVO: Layout horizontal (landscape) — foto y controles
+          lado a lado.
+   v7.6:  FIX "Guardar como ejemplo" — redimensiona a 400px,
+          toast de éxito/error. Pantalla de ejemplos en
+          Ajustes. Few-shot conectado a cada análisis.
    v7.5:  1 sola llamada API en foto única (coste x1).
           Si confidence es "media"/"baja", aviso visual
           destacado para revisar la foto y ajustar ±1.
@@ -17,7 +23,7 @@
    Fix: JSON parser robusto
    ══════════════════════════════════════════ */
 
-const VERSION = 'v7.6';
+const VERSION = 'v7.7';
 let lastImageBase64 = null;
 let lastImageMime   = 'image/jpeg';
 let isAnalyzing     = false;
@@ -28,6 +34,10 @@ const UNIT_WEIGHTS  = { p4:0.12, p8:0.05, p12:0.12 };
 let multifotos = [];
 let multiTotal  = 0;
 let multiMode   = false;
+
+/* ── estado zonas / wakelock ── */
+let zonesActive = false;
+let wakeLock    = null;
 
 const qs  = s => document.querySelector(s);
 const qsa = s => document.querySelectorAll(s);
@@ -41,7 +51,7 @@ const PELLET_PROFILES = {
 /* ══ INIT ══ */
 document.addEventListener('DOMContentLoaded', () => {
   restoreSettings(); initGrav(); loadHistory(); updateHistoryBadge();
-  renderProductSelector();
+  renderProductSelector(); renderExampleCounts();
   const ap = localStorage.getItem('activeProfile');
   if (ap) setTimeout(() => highlightProfile(ap), 100);
 });
@@ -58,6 +68,17 @@ function showToast(msg, isError) {
   t.style.cssText = `position:fixed;bottom:calc(env(safe-area-inset-bottom,0px)+80px);left:50%;transform:translateX(-50%);background:${isError?'#3a1a06':'#0e3a26'};color:${isError?'#f97316':'#3ecf8e'};border:0.5px solid ${isError?'#f97316':'#3ecf8e'};padding:10px 18px;border-radius:20px;font-size:13px;z-index:9999;font-weight:500;pointer-events:none;white-space:nowrap`;
   t.style.opacity = '1'; clearTimeout(t._t);
   t._t = setTimeout(() => t.style.opacity = '0', 2500);
+}
+
+async function acquireWakeLock() {
+  try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); }
+  catch (err) { /* no crítico: algunos navegadores/pestañas en background lo rechazan */ }
+}
+function releaseWakeLock() {
+  if (wakeLock) { wakeLock.release().catch(() => {}); wakeLock = null; }
+}
+function vibrateDone() {
+  if (navigator.vibrate) navigator.vibrate(200);
 }
 
 /* ══ TABS ══ */
@@ -275,10 +296,12 @@ window.confirmMultiTotal = function() {
     else if(diff<0)albEl.innerHTML=`<span style="color:#f97316">⚠️ FALTAN ${Math.abs(diff)} uds (albarán: ${alb})</span>`;
     else albEl.innerHTML=`<span style="color:#f59e0b">ℹ️ SOBRAN ${diff} uds (albarán: ${alb})</span>`;
   }
+  renderAlbaranBar(multiTotal,alb);
   qs('#resultsCount').style.display='block';
   qs('#exportBox').style.display='block';
   qs('#manualAdj').style.display='flex';
   qs('#btnSaveExample').style.display='none';
+  qs('#btnZones').style.display='none'; exitZonesView();
   buildOdoo();
   saveHistoryEntry({
     date:new Date().toLocaleDateString('es-ES')+' '+new Date().toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'}),
@@ -288,6 +311,7 @@ window.confirmMultiTotal = function() {
     albaran:alb||null,odoo:buildOdooText()
   });
   showToast(`Total ${multiTotal} uds ✓`);
+  vibrateDone();
 };
 
 /* ══ FOTO ÚNICA ══ */
@@ -319,11 +343,13 @@ async function runCountAI() {
   const apiKey=getApiKey();
   if(!apiKey){showToast('Introduce tu API key en ⚙️ Ajustes',true);switchTab('settings');return;}
   isAnalyzing=true;
+  acquireWakeLock();
   qs('#analyzeSpinner').style.display='block';qs('#btnRecount').disabled=true;
   setStatus('statusCount','🔍 Claude está analizando la imagen…');qs('#statusCount').style.color='';
   qs('#confWarning').style.display='none';
   qs('#albaranResult').style.display='none';qs('#resultsCount').style.display='none';
   qs('#exportBox').style.display='none';qs('#manualAdj').style.display='none';qs('#btnSaveExample').style.display='none';
+  qs('#btnZones').style.display='none'; exitZonesView();
 
   const productDesc=qs('#productDesc').value.trim()||PELLET_PROFILES['8'];
   const sizeMode=qs('#sizeMode').value,singleSize=qs('#singleSize').value;
@@ -397,6 +423,7 @@ Sustituye los 0 por los conteos reales. confidence: "alta" "media" o "baja". not
       else if(diff<0)albEl.innerHTML=`<span style="color:#f97316">⚠️ FALTAN ${Math.abs(diff)} uds (albarán: ${albaranQty})</span>`;
       else albEl.innerHTML=`<span style="color:#f59e0b">ℹ️ SOBRAN ${diff} uds (albarán: ${albaranQty})</span>`;
     }
+    renderAlbaranBar(total,albaranQty);
 
     const confColor=result.confidence==='alta'?'#3ecf8e':result.confidence==='media'?'#f59e0b':'#f97316';
     setStatus('statusCount',`✓ ${total} detectados · Confianza: ${result.confidence}${result.notes?' · '+result.notes:''}`);
@@ -412,7 +439,7 @@ Sustituye los 0 por los conteos reales. confidence: "alta" "media" o "baja". not
     }
 
     drawOverlay(total,result.confidence);
-    qs('#resultsCount').style.display='block';qs('#exportBox').style.display='block';qs('#manualAdj').style.display='flex';qs('#btnSaveExample').style.display='flex';
+    qs('#resultsCount').style.display='block';qs('#exportBox').style.display='block';qs('#manualAdj').style.display='flex';qs('#btnSaveExample').style.display='flex';qs('#btnZones').style.display='';
     buildOdoo();
     saveHistoryEntry({
       date:new Date().toLocaleDateString('es-ES')+' '+new Date().toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'}),
@@ -420,10 +447,12 @@ Sustituye los 0 por los conteos reales. confidence: "alta" "media" o "baja". not
       product:(qs('#productDesc').value||'').slice(0,60),
       confidence:result.confidence,notes:result.notes,albaran:albaranQty||null,odoo:buildOdooText()
     });
+    vibrateDone();
   } catch(err) {
     setStatus('statusCount','✗ '+err.message,'#f97316');showToast(err.message,true);
   } finally {
     isAnalyzing=false;qs('#btnRecount').disabled=false;qs('#analyzeSpinner').style.display='none';
+    releaseWakeLock();
   }
 }
 
@@ -436,6 +465,20 @@ function drawOverlay(total,confidence){
   ctx.fillStyle=col;ctx.font='12px -apple-system,sans-serif';ctx.fillText(`Confianza ${confidence}`,20,60);
 }
 
+/* ══ BARRA COMPARACIÓN ALBARÁN ══ */
+function renderAlbaranBar(total, albaranQty) {
+  const bar=qs('#albaranBar'); if(!bar) return;
+  if(!albaranQty||albaranQty<=0){ bar.style.display='none'; return; }
+  bar.style.display='flex';
+  const diff=total-albaranQty;
+  const pct=Math.max(0,Math.min(100,Math.round(total/albaranQty*100)));
+  const color=diff===0?'var(--green)':diff>0?'var(--orange)':'var(--red)';
+  qs('#albBarRefNum').textContent=albaranQty;
+  const fill=qs('#albBarCounted');
+  fill.style.width=pct+'%'; fill.style.background=color;
+  qs('#albBarCountedNum').textContent=diff===0?`${total} ✓`:`${total} (${diff>0?'+':''}${diff} uds ⚠️)`;
+}
+
 /* ══ AJUSTE MANUAL ±1 ══ */
 window.adjustCount = function(delta) {
   counts.total=Math.max(0,counts.total+delta);
@@ -446,12 +489,77 @@ window.adjustCount = function(delta) {
     else{counts.c8=counts.total;qs('#c8').textContent=counts.total;}
   } else {counts.c8=Math.max(0,counts.c8+delta);qs('#c8').textContent=counts.c8;}
   qs('#cT').textContent=counts.total;buildOdoo();
+  renderAlbaranBar(counts.total,parseInt(qs('#albaranQty').value)||0);
+  if(zonesActive)exitZonesView();
   showToast(`Total ajustado: ${counts.total} uds`);
 };
+
+/* ══════════════════════════════════════
+   MODO ZONAS — subtotales por cuadrante
+   (distribución proporcional por área, sin llamada a la API)
+   ══════════════════════════════════════ */
+function distributeInts(total, n) {
+  const base=Math.floor(total/n), rem=total-base*n;
+  return Array.from({length:n},(_,i)=>base+(i<rem?1:0));
+}
+function largestRemainderRound(values, total) {
+  const floors=values.map(Math.floor);
+  const sum=floors.reduce((a,b)=>a+b,0);
+  const remainder=total-sum;
+  const order=values.map((v,i)=>({i,frac:v-Math.floor(v)})).sort((a,b)=>b.frac-a.frac);
+  const result=floors.slice();
+  for(let k=0;k<remainder && order.length>0;k++) result[order[k%order.length].i]++;
+  return result;
+}
+window.toggleZones = function() {
+  if(zonesActive){ exitZonesView(); return; }
+  const total=counts.total;
+  if(total<=30){ showToast('Pocos pellets, vista normal suficiente'); return; }
+  const big=total>=81, n=big?3:2;
+  enterZonesView(n,n,total);
+};
+function enterZonesView(rows, cols, total) {
+  const canvas=qs('#cvCount'); if(!canvas||!canvas.width) return;
+  const colWidths=distributeInts(canvas.width,cols);
+  const rowHeights=distributeInts(canvas.height,rows);
+  const areas=[];
+  for(let r=0;r<rows;r++) for(let c=0;c<cols;c++) areas.push(colWidths[c]*rowHeights[r]);
+  const totalArea=canvas.width*canvas.height;
+  const raw=areas.map(a=>total*a/totalArea);
+  const zoneCounts=largestRemainderRound(raw,total);
+  const maxIdx=zoneCounts.indexOf(Math.max(...zoneCounts));
+
+  const overlay=qs('#zoneOverlay');
+  overlay.style.gridTemplateColumns=colWidths.map(w=>w+'fr').join(' ');
+  overlay.style.gridTemplateRows=rowHeights.map(h=>h+'fr').join(' ');
+  overlay.innerHTML=zoneCounts.map((n,i)=>
+    `<div class="zone-cell${i===maxIdx?' zone-max':''}"><span class="zone-badge">${n}</span></div>`
+  ).join('');
+  overlay.hidden=false;
+  zonesActive=true;
+  qs('#btnZones').textContent='📷 Vista normal';
+}
+function exitZonesView() {
+  const overlay=qs('#zoneOverlay'); if(overlay) overlay.hidden=true;
+  zonesActive=false;
+  const btn=qs('#btnZones'); if(btn) btn.textContent='⊞ Zonas';
+}
 
 /* ══ EJEMPLOS DE REFERENCIA (few-shot) ══ */
 const MAX_REFERENCE_EXAMPLES = 10;
 const EXAMPLE_MAX_DIM = 400;
+const FEWSHOT_TARGET = 5;
+
+function renderExampleCounts() {
+  const el = qs('#exCounts'); if (!el) return;
+  const examples = getReferenceExamples();
+  const counts4 = { '4':0, '8':0, '12':0 };
+  examples.forEach(e => { if (counts4[e.size] !== undefined) counts4[e.size]++; });
+  el.innerHTML = '📚 ' + ['4','8','12'].map(s => {
+    const n = counts4[s];
+    return `${s}mm:${n}${n>=FEWSHOT_TARGET?' <span class="ok">✓</span>':''}`;
+  }).join('&nbsp;&nbsp;');
+}
 
 function resizeImageBase64(base64, mime, maxDim) {
   return new Promise((resolve, reject) => {
@@ -516,8 +624,14 @@ window.saveAsExample = async function() {
     examples.push(entry);
     while (examples.length > MAX_REFERENCE_EXAMPLES) examples.shift();
     if (!persistReferenceExamples(examples)) { showToast('No se pudo guardar: almacenamiento lleno', true); return; }
-    showToast('Ejemplo guardado ✓');
+    const sizeCount = entry.size ? examples.filter(e => e.size === entry.size).length : null;
+    if (entry.size && sizeCount === FEWSHOT_TARGET) {
+      showToast(`¡Few-shot activo para ${entry.size}mm! (${FEWSHOT_TARGET} ejemplos)`);
+    } else {
+      showToast(`✓ Ejemplo guardado (${sizeCount!==null?sizeCount:examples.length}/${FEWSHOT_TARGET})`);
+    }
     renderExamplesSettings();
+    renderExampleCounts();
   } catch (err) {
     showToast('Error al guardar ejemplo: ' + err.message, true);
   }
@@ -527,6 +641,7 @@ window.deleteExample = function(id) {
   const examples = getReferenceExamples().filter(e => e.id !== id);
   if (!persistReferenceExamples(examples)) { showToast('Error al borrar',true); return; }
   renderExamplesSettings();
+  renderExampleCounts();
   showToast('Ejemplo borrado');
 };
 
@@ -535,6 +650,7 @@ window.deleteExamplesBySize = function(size) {
   const examples = getReferenceExamples().filter(e => e.size !== size);
   persistReferenceExamples(examples);
   renderExamplesSettings();
+  renderExampleCounts();
   showToast(`Ejemplos de ${size}mm borrados`);
 };
 
