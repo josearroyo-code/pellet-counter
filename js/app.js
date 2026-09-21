@@ -1,16 +1,25 @@
 /* ══════════════════════════════════════════
-   Pellet Counter v7.7
-   NUEVO: Modo zonas — divide la foto en cuadrantes
-          (2x2 / 3x3 según cantidad) con subtotal
-          proporcional por área, sin llamada extra a la API.
-   NUEVO: Barra visual de comparación con el albarán.
-   NUEVO: Contador de ejemplos few-shot por tamaño en la
-          barra superior, con aviso al llegar a 5.
-   NUEVO: Vibración al completar el análisis (móvil).
-   NUEVO: WakeLock — evita que la pantalla se apague
-          mientras Claude analiza.
-   NUEVO: Layout horizontal (landscape) — foto y controles
-          lado a lado.
+   Pellet Counter v7.8 — fixes de tests reales en Android
+   FIX: "Vista normal" no ocultaba el overlay de zonas —
+        [hidden] empataba en especificidad con .zone-overlay
+        y perdía. Regla .zone-overlay[hidden] añadida.
+   FIX: barra visual de albarán reemplazada por texto simple
+        con emoji (más robusto en dispositivos reales).
+   NUEVO: toast grande centrado (3s) al guardar un ejemplo,
+          verde si va bien, naranja con causa si falla.
+   NUEVO: vibración en patrón [100,50,100] al completar un
+          análisis, vibración corta al guardar un ejemplo.
+   NUEVO: contador de ejemplos en la barra superior con
+          iconos de color por tamaño, más grande y visible.
+   NUEVO: aviso "Few-shot activo" en la card de Contar desde
+          3 ejemplos del mismo tamaño.
+   NUEVO: historial con notas truncadas a 60 caracteres,
+          icono de confianza y badge de tamaño; sección
+          "Mis ejemplos guardados" al final.
+   NUEVO: en Ajustes, progreso "X/5 — few-shot parcial/
+          completamente activo" por tamaño.
+   v7.7:  Modo zonas, contador few-shot, vibración, WakeLock,
+          layout horizontal.
    v7.6:  FIX "Guardar como ejemplo" — redimensiona a 400px,
           toast de éxito/error. Pantalla de ejemplos en
           Ajustes. Few-shot conectado a cada análisis.
@@ -23,7 +32,7 @@
    Fix: JSON parser robusto
    ══════════════════════════════════════════ */
 
-const VERSION = 'v7.7';
+const VERSION = 'v7.8';
 let lastImageBase64 = null;
 let lastImageMime   = 'image/jpeg';
 let isAnalyzing     = false;
@@ -51,7 +60,7 @@ const PELLET_PROFILES = {
 /* ══ INIT ══ */
 document.addEventListener('DOMContentLoaded', () => {
   restoreSettings(); initGrav(); loadHistory(); updateHistoryBadge();
-  renderProductSelector(); renderExampleCounts();
+  renderProductSelector(); renderExampleCounts(); updateFewshotNotice();
   const ap = localStorage.getItem('activeProfile');
   if (ap) setTimeout(() => highlightProfile(ap), 100);
 });
@@ -78,14 +87,28 @@ function releaseWakeLock() {
   if (wakeLock) { wakeLock.release().catch(() => {}); wakeLock = null; }
 }
 function vibrateDone() {
-  if (navigator.vibrate) navigator.vibrate(200);
+  if (navigator.vibrate) navigator.vibrate([100,50,100]);
+}
+function vibrateShort() {
+  if (navigator.vibrate) navigator.vibrate(80);
+}
+
+function showBigToast(msg, isError) {
+  let t = qs('#bigToast');
+  if (!t) { t = document.createElement('div'); t.id = 'bigToast'; t.className = 'big-toast'; document.body.appendChild(t); }
+  t.textContent = msg;
+  t.className = 'big-toast ' + (isError ? 'big-toast-error' : 'big-toast-ok');
+  clearTimeout(t._t);
+  t.classList.remove('show');
+  requestAnimationFrame(() => requestAnimationFrame(() => t.classList.add('show')));
+  t._t = setTimeout(() => t.classList.remove('show'), 3000);
 }
 
 /* ══ TABS ══ */
 window.switchTab = function(name) {
   qsa('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
   qsa('.panel').forEach(p => p.classList.toggle('active', p.id === 'panel-' + name));
-  if (name === 'history') renderHistory();
+  if (name === 'history') { renderHistory(); renderHistoryExamples(); }
   if (name === 'settings') renderExamplesSettings();
 };
 
@@ -157,6 +180,7 @@ window.loadProfile = function(key) {
     qs('#singleSize').value=key;localStorage.setItem('sizeMode','single');localStorage.setItem('singleSize',key);
   }
   localStorage.setItem('activeProfile',key);highlightProfile(key);
+  updateFewshotNotice();
   showToast(key==='custom'?'Perfil personalizado':`Perfil ${key}mm cargado`);
 };
 function highlightProfile(key) {
@@ -289,14 +313,7 @@ window.confirmMultiTotal = function() {
   const breakdown=multifotos.map((f,i)=>`F${i+1}:${f.result?.total||0}`).join(' ');
   setStatus('statusCount',`✓ Total ${multiTotal} uds de ${multifotos.length} fotos (${breakdown})`,'#3ecf8e');
   const alb=parseInt(qs('#albaranQty').value)||0;
-  if(alb>0){
-    const diff=multiTotal-alb,albEl=qs('#albaranResult');
-    albEl.style.display='block';
-    if(diff===0)albEl.innerHTML=`<span style="color:#3ecf8e">✓ COINCIDE con albarán (${alb} uds)</span>`;
-    else if(diff<0)albEl.innerHTML=`<span style="color:#f97316">⚠️ FALTAN ${Math.abs(diff)} uds (albarán: ${alb})</span>`;
-    else albEl.innerHTML=`<span style="color:#f59e0b">ℹ️ SOBRAN ${diff} uds (albarán: ${alb})</span>`;
-  }
-  renderAlbaranBar(multiTotal,alb);
+  renderAlbaranStatus(multiTotal,alb);
   qs('#resultsCount').style.display='block';
   qs('#exportBox').style.display='block';
   qs('#manualAdj').style.display='flex';
@@ -416,14 +433,7 @@ Sustituye los 0 por los conteos reales. confidence: "alta" "media" o "baja". not
     qs('#c12').textContent=sizeMode==='single'?(singleSize==='12'?total:'—'):counts.c12;
     qs('#cT').textContent=total;
 
-    if(albaranQty>0){
-      const diff=total-albaranQty,albEl=qs('#albaranResult');
-      albEl.style.display='block';
-      if(diff===0)albEl.innerHTML=`<span style="color:#3ecf8e">✓ COINCIDE con albarán (${albaranQty} uds)</span>`;
-      else if(diff<0)albEl.innerHTML=`<span style="color:#f97316">⚠️ FALTAN ${Math.abs(diff)} uds (albarán: ${albaranQty})</span>`;
-      else albEl.innerHTML=`<span style="color:#f59e0b">ℹ️ SOBRAN ${diff} uds (albarán: ${albaranQty})</span>`;
-    }
-    renderAlbaranBar(total,albaranQty);
+    renderAlbaranStatus(total,albaranQty);
 
     const confColor=result.confidence==='alta'?'#3ecf8e':result.confidence==='media'?'#f59e0b':'#f97316';
     setStatus('statusCount',`✓ ${total} detectados · Confianza: ${result.confidence}${result.notes?' · '+result.notes:''}`);
@@ -465,18 +475,19 @@ function drawOverlay(total,confidence){
   ctx.fillStyle=col;ctx.font='12px -apple-system,sans-serif';ctx.fillText(`Confianza ${confidence}`,20,60);
 }
 
-/* ══ BARRA COMPARACIÓN ALBARÁN ══ */
-function renderAlbaranBar(total, albaranQty) {
-  const bar=qs('#albaranBar'); if(!bar) return;
-  if(!albaranQty||albaranQty<=0){ bar.style.display='none'; return; }
-  bar.style.display='flex';
+/* ══ COMPARACIÓN ALBARÁN ══ */
+function renderAlbaranStatus(total, albaranQty) {
+  const el=qs('#albaranResult'); if(!el) return;
+  if(!albaranQty||albaranQty<=0){ el.style.display='none'; return; }
+  el.style.display='block';
   const diff=total-albaranQty;
-  const pct=Math.max(0,Math.min(100,Math.round(total/albaranQty*100)));
-  const color=diff===0?'var(--green)':diff>0?'var(--orange)':'var(--red)';
-  qs('#albBarRefNum').textContent=albaranQty;
-  const fill=qs('#albBarCounted');
-  fill.style.width=pct+'%'; fill.style.background=color;
-  qs('#albBarCountedNum').textContent=diff===0?`${total} ✓`:`${total} (${diff>0?'+':''}${diff} uds ⚠️)`;
+  if(diff===0){
+    el.innerHTML=`<span style="color:var(--green)">📋 Albarán: ${albaranQty} · Contado: ${total} · ✓ COINCIDE</span>`;
+  } else if(diff<0){
+    el.innerHTML=`<span style="color:var(--red)">📋 Albarán: ${albaranQty} · Contado: ${total} · ⚠️ FALTAN ${Math.abs(diff)} uds</span>`;
+  } else {
+    el.innerHTML=`<span style="color:var(--orange)">📋 Albarán: ${albaranQty} · Contado: ${total} · ℹ️ SOBRAN ${diff} uds</span>`;
+  }
 }
 
 /* ══ AJUSTE MANUAL ±1 ══ */
@@ -489,7 +500,7 @@ window.adjustCount = function(delta) {
     else{counts.c8=counts.total;qs('#c8').textContent=counts.total;}
   } else {counts.c8=Math.max(0,counts.c8+delta);qs('#c8').textContent=counts.c8;}
   qs('#cT').textContent=counts.total;buildOdoo();
-  renderAlbaranBar(counts.total,parseInt(qs('#albaranQty').value)||0);
+  renderAlbaranStatus(counts.total,parseInt(qs('#albaranQty').value)||0);
   if(zonesActive)exitZonesView();
   showToast(`Total ajustado: ${counts.total} uds`);
 };
@@ -540,7 +551,8 @@ function enterZonesView(rows, cols, total) {
   qs('#btnZones').textContent='📷 Vista normal';
 }
 function exitZonesView() {
-  const overlay=qs('#zoneOverlay'); if(overlay) overlay.hidden=true;
+  const overlay=qs('#zoneOverlay');
+  if(overlay){ overlay.hidden=true; overlay.innerHTML=''; }
   zonesActive=false;
   const btn=qs('#btnZones'); if(btn) btn.textContent='⊞ Zonas';
 }
@@ -549,16 +561,33 @@ function exitZonesView() {
 const MAX_REFERENCE_EXAMPLES = 10;
 const EXAMPLE_MAX_DIM = 400;
 const FEWSHOT_TARGET = 5;
+const FEWSHOT_MIN = 3;
 
 function renderExampleCounts() {
   const el = qs('#exCounts'); if (!el) return;
   const examples = getReferenceExamples();
   const counts4 = { '4':0, '8':0, '12':0 };
   examples.forEach(e => { if (counts4[e.size] !== undefined) counts4[e.size]++; });
-  el.innerHTML = '📚 ' + ['4','8','12'].map(s => {
+  const dot = { '4':'🔵', '8':'🟢', '12':'🟠' };
+  el.innerHTML = ['4','8','12'].map(s => {
     const n = counts4[s];
-    return `${s}mm:${n}${n>=FEWSHOT_TARGET?' <span class="ok">✓</span>':''}`;
-  }).join('&nbsp;&nbsp;');
+    const num = n>=FEWSHOT_TARGET ? `<span class="ok">${n}✓</span>` : n;
+    return `${dot[s]} ${s}mm:${num}`;
+  }).join('&nbsp;&nbsp;&nbsp;');
+}
+
+function updateFewshotNotice() {
+  const el = qs('#fewshotNotice'); if (!el) return;
+  const sizeMode = qs('#sizeMode')?.value;
+  const singleSize = qs('#singleSize')?.value;
+  if (sizeMode !== 'single' || !singleSize) { el.style.display='none'; return; }
+  const n = getReferenceExamples().filter(e => e.size === singleSize).length;
+  if (n >= FEWSHOT_MIN) {
+    el.style.display='flex';
+    el.textContent = `✦ Few-shot activo para ${singleSize}mm (${n} ejemplo${n>1?'s':''})`;
+  } else {
+    el.style.display='none';
+  }
 }
 
 function resizeImageBase64(base64, mime, maxDim) {
@@ -608,7 +637,7 @@ function persistReferenceExamples(examples) {
 }
 
 window.saveAsExample = async function() {
-  if(!lastImageBase64){showToast('No hay foto para guardar',true);return;}
+  if(!lastImageBase64){showBigToast('No hay foto para guardar',true);return;}
   try {
     const resized = await resizeImageBase64(lastImageBase64, lastImageMime, EXAMPLE_MAX_DIM);
     const sizeMode = qs('#sizeMode').value, singleSize = qs('#singleSize').value;
@@ -623,17 +652,22 @@ window.saveAsExample = async function() {
     let examples = getReferenceExamples();
     examples.push(entry);
     while (examples.length > MAX_REFERENCE_EXAMPLES) examples.shift();
-    if (!persistReferenceExamples(examples)) { showToast('No se pudo guardar: almacenamiento lleno', true); return; }
+    if (!persistReferenceExamples(examples)) { showBigToast('No se pudo guardar: almacenamiento lleno', true); return; }
     const sizeCount = entry.size ? examples.filter(e => e.size === entry.size).length : null;
     if (entry.size && sizeCount === FEWSHOT_TARGET) {
-      showToast(`¡Few-shot activo para ${entry.size}mm! (${FEWSHOT_TARGET} ejemplos)`);
+      showBigToast(`¡Few-shot activo para ${entry.size}mm! (${FEWSHOT_TARGET} ejemplos)`);
+    } else if (entry.size) {
+      showBigToast(`✓ Ejemplo ${entry.size}mm guardado (${sizeCount}/${FEWSHOT_TARGET})`);
     } else {
-      showToast(`✓ Ejemplo guardado (${sizeCount!==null?sizeCount:examples.length}/${FEWSHOT_TARGET})`);
+      showBigToast(`✓ Ejemplo guardado (${examples.length} en total)`);
     }
+    vibrateShort();
     renderExamplesSettings();
+    renderHistoryExamples();
     renderExampleCounts();
+    updateFewshotNotice();
   } catch (err) {
-    showToast('Error al guardar ejemplo: ' + err.message, true);
+    showBigToast('Error al guardar ejemplo: ' + err.message, true);
   }
 };
 
@@ -641,7 +675,9 @@ window.deleteExample = function(id) {
   const examples = getReferenceExamples().filter(e => e.id !== id);
   if (!persistReferenceExamples(examples)) { showToast('Error al borrar',true); return; }
   renderExamplesSettings();
+  renderHistoryExamples();
   renderExampleCounts();
+  updateFewshotNotice();
   showToast('Ejemplo borrado');
 };
 
@@ -650,36 +686,57 @@ window.deleteExamplesBySize = function(size) {
   const examples = getReferenceExamples().filter(e => e.size !== size);
   persistReferenceExamples(examples);
   renderExamplesSettings();
+  renderHistoryExamples();
   renderExampleCounts();
+  updateFewshotNotice();
   showToast(`Ejemplos de ${size}mm borrados`);
 };
 
-window.renderExamplesSettings = function() {
-  const el = qs('#examplesSettings'); if (!el) return;
+function buildExamplesGroupsHTML() {
   const examples = getReferenceExamples();
   if (examples.length === 0) {
-    el.innerHTML = '<p style="color:var(--muted);font-size:12px;text-align:center;padding:16px">Sin ejemplos guardados aún. Tras un análisis en la pestaña Contar, usa "✓ Guardar como ejemplo".</p>';
-    return;
+    return '<p style="color:var(--muted);font-size:12px;text-align:center;padding:16px">Sin ejemplos guardados aún. Tras un análisis en la pestaña Contar, usa "✓ Guardar como ejemplo".</p>';
   }
   const groups = { '4': [], '8': [], '12': [], other: [] };
   examples.forEach(e => { (groups[e.size] || groups.other).push(e); });
   const sizeLabel = { '4': '4mm', '8': '8mm', '12': '12mm', other: 'Sin tamaño único (modo clasificar)' };
-  el.innerHTML = ['4', '8', '12', 'other'].filter(k => groups[k].length > 0).map(k => `
+  return ['4', '8', '12', 'other'].filter(k => groups[k].length > 0).map(k => {
+    const n = groups[k].length;
+    let progress = '';
+    if (k !== 'other') {
+      if (n >= FEWSHOT_TARGET) progress = `<div style="font-size:11px;color:var(--green);font-weight:700;margin-bottom:8px">${n}/${FEWSHOT_TARGET} ejemplos — ✓ few-shot completamente activo</div>`;
+      else if (n >= FEWSHOT_MIN) progress = `<div style="font-size:11px;color:var(--blue);margin-bottom:8px">${n}/${FEWSHOT_TARGET} ejemplos — few-shot parcialmente activo</div>`;
+      else progress = `<div style="font-size:11px;color:var(--muted);margin-bottom:8px">${n}/${FEWSHOT_TARGET} ejemplos</div>`;
+    }
+    return `
     <div style="margin-bottom:14px">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-        <span style="font-size:12px;font-weight:700">${sizeLabel[k]} · ${groups[k].length} ejemplo${groups[k].length>1?'s':''}</span>
-        ${k!=='other'?`<button onclick="deleteExamplesBySize('${k}')" style="font-size:10px;padding:4px 8px;color:var(--orange);border-color:var(--orange)">🗑 Borrar todos</button>`:''}
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;flex-wrap:wrap;gap:6px">
+        <span style="font-size:12px;font-weight:700">${sizeLabel[k]} · ${n} ejemplo${n>1?'s':''}</span>
+        ${k!=='other'?`<button onclick="deleteExamplesBySize('${k}')" style="font-size:10px;padding:4px 8px;color:var(--orange);border-color:var(--orange)">🗑 Borrar todos los ejemplos de ${k}mm</button>`:''}
       </div>
+      ${progress}
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         ${groups[k].map(e => `
-          <div style="position:relative;width:64px">
-            <img src="data:${e.mime};base64,${e.image}" style="width:64px;height:64px;object-fit:cover;border-radius:8px;border:0.5px solid var(--border);display:block">
+          <div style="position:relative;width:72px">
+            <img src="data:${e.mime};base64,${e.image}" style="width:72px;height:72px;object-fit:cover;border-radius:8px;border:0.5px solid var(--border);display:block">
             <div style="font-size:10px;text-align:center;color:var(--muted);margin-top:2px">${e.total} uds</div>
+            <div style="font-size:9px;text-align:center;color:var(--hint)">${e.date}</div>
             <button onclick="deleteExample('${e.id}')" style="position:absolute;top:-6px;right:-6px;width:20px;height:20px;padding:0;border-radius:50%;font-size:10px;line-height:1;background:var(--orange-dim);border-color:var(--orange);color:var(--orange);display:flex;align-items:center;justify-content:center">✕</button>
           </div>`).join('')}
       </div>
-    </div>`).join('');
+    </div>`;
+  }).join('');
+}
+
+window.renderExamplesSettings = function() {
+  const el = qs('#examplesSettings'); if (!el) return;
+  el.innerHTML = buildExamplesGroupsHTML();
 };
+
+function renderHistoryExamples() {
+  const el = qs('#historyExamplesList'); if (!el) return;
+  el.innerHTML = buildExamplesGroupsHTML();
+}
 
 /* ══ EXPORT ODOO ══ */
 function buildOdooText(){
@@ -753,19 +810,23 @@ window.renderHistory=function(){
   const el=qs('#historyList');if(!el)return;
   const h=loadHistory();
   if(h.length===0){el.innerHTML='<p style="color:var(--muted);font-size:13px;text-align:center;padding:24px">Sin análisis aún</p>';return;}
+  const confIcon={alta:'🟢',media:'🟡',baja:'🔴'};
+  const sizeDot={4:'🔵',8:'🟢',12:'🟠'};
   el.innerHTML=h.map((e,i)=>{
-    const col=e.confidence==='alta'?'#3ecf8e':e.confidence==='media'?'#f59e0b':'#f97316';
+    const notesShort=e.notes?(e.notes.length>60?e.notes.slice(0,60)+'...':e.notes):'';
+    const sizesUsed=[e.size4>0?4:null,e.size8>0?8:null,e.size12>0?12:null].filter(Boolean);
+    const sizeBadge=sizesUsed.length===1
+      ?`<span style="font-size:11px;font-weight:700">${sizeDot[sizesUsed[0]]} ${sizesUsed[0]}mm:${e['size'+sizesUsed[0]]}</span>`
+      :sizesUsed.map(s=>`<span style="font-size:11px">${sizeDot[s]} ${s}mm:${e['size'+s]}</span>`).join(' ');
     return `<div style="background:var(--surface);border:0.5px solid var(--border);border-radius:var(--radius);padding:12px;margin-bottom:10px">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px">
         <span style="font-size:15px;font-weight:700">${e.total} uds</span>
-        <span style="font-size:10px;padding:2px 8px;border-radius:10px;background:${col}22;color:${col};font-weight:700">${e.confidence||'—'}</span>
+        <span style="font-size:16px" title="Confianza ${e.confidence||'—'}">${confIcon[e.confidence]||'—'}</span>
       </div>
       <div style="font-size:11px;color:var(--muted);margin-bottom:4px">${e.date}</div>
-      ${e.notes?`<div style="font-size:11px;color:var(--hint);font-style:italic;margin-bottom:6px">${e.notes}</div>`:''}
-      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:8px">
-        ${e.size4>0?`<span style="font-size:11px;color:#4a9eff">4mm:${e.size4}</span>`:''}
-        ${e.size8>0?`<span style="font-size:11px;color:#3ecf8e">8mm:${e.size8}</span>`:''}
-        ${e.size12>0?`<span style="font-size:11px;color:#f97316">12mm:${e.size12}</span>`:''}
+      ${notesShort?`<div style="font-size:11px;color:var(--hint);font-style:italic;margin-bottom:6px">${notesShort}</div>`:''}
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:8px;align-items:center">
+        ${sizeBadge}
         ${e.albaran?`<span style="font-size:11px;color:var(--muted)">Albarán:${e.albaran}</span>`:''}
       </div>
       ${e.odoo?`<button onclick="copyHistEntry(${i})" style="font-size:11px;padding:5px 10px">📋 Copiar Odoo</button>`:''}

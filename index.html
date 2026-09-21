@@ -73,24 +73,25 @@
     @keyframes load{from{width:0}to{width:100%}}
 
     /* ── subbar contador de ejemplos ── */
-    .subbar{padding:6px 16px;font-family:'SF Mono','Fira Code',monospace;font-size:10.5px;color:var(--hint);border-bottom:0.5px solid var(--border);background:var(--bg);display:flex;gap:12px;flex-wrap:wrap;}
-    .subbar .ok{color:var(--green);font-weight:700;}
+    .subbar{padding:8px 16px;font-size:13px;font-weight:700;color:var(--text);border-bottom:0.5px solid var(--border);background:var(--bg);display:flex;gap:14px;flex-wrap:wrap;align-items:center;}
+    .subbar .ok{color:var(--green);}
 
     /* ── modo zonas ── */
     .canvas-wrap{position:relative;}
     .zone-overlay{position:absolute;inset:0;display:grid;}
+    .zone-overlay[hidden]{display:none;}
     .zone-cell{position:relative;display:flex;align-items:center;justify-content:center;border:1px solid rgba(255,255,255,.32);box-sizing:border-box;}
     .zone-cell.zone-max{border:2px solid var(--orange);}
     .zone-badge{background:rgba(0,0,0,.72);color:#fff;font-weight:800;font-size:15px;padding:4px 10px;border-radius:8px;line-height:1;}
 
-    /* ── barra comparación albarán ── */
-    .alb-bar{display:none;flex-direction:column;gap:6px;margin-bottom:12px;font-size:11px;}
-    .alb-row{display:flex;align-items:center;gap:8px;}
-    .alb-label{width:56px;flex-shrink:0;color:var(--muted);font-weight:700;}
-    .alb-track{flex:1;height:10px;background:var(--surface2);border-radius:6px;overflow:hidden;}
-    .alb-fill{height:100%;border-radius:6px;background:var(--muted);transition:width .35s ease;}
-    .alb-fill.alb-ref{background:var(--border2);}
-    .alb-num{width:70px;flex-shrink:0;text-align:right;font-family:'SF Mono','Fira Code',monospace;font-weight:700;font-size:11px;}
+    /* ── notificación few-shot activo ── */
+    .fewshot-notice{display:none;font-size:11px;color:var(--green);font-weight:600;margin:-4px 0 10px;align-items:center;gap:4px;}
+
+    /* ── toast grande (guardar ejemplo) ── */
+    .big-toast{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%) scale(.92);z-index:10000;padding:18px 26px;border-radius:16px;font-size:18px;font-weight:800;text-align:center;max-width:86vw;line-height:1.4;opacity:0;transition:opacity .25s ease,transform .25s ease;pointer-events:none;box-shadow:0 14px 44px rgba(0,0,0,.55);}
+    .big-toast.show{opacity:1;transform:translate(-50%,-50%) scale(1);}
+    .big-toast-ok{background:var(--green-dim);color:var(--green);border:2px solid var(--green);}
+    .big-toast-error{background:var(--orange-dim);color:var(--orange);border:2px solid var(--orange);}
 
     /* ── landscape: foto izq / controles der ── */
     .count-layout{display:flex;flex-direction:column;}
@@ -108,7 +109,7 @@
     <h1>Pellet Counter <span class="ai-badge">✦ Claude AI</span></h1>
     <div style="display:flex;align-items:center;gap:10px">
       <div id="analyzeSpinner" class="spinner"></div>
-      <span class="ver">v7.7</span>
+      <span class="ver">v7.8</span>
     </div>
   </div>
   <div class="subbar" id="exCounts"></div>
@@ -138,14 +139,15 @@
           <button class="prof-btn" data-key="12"     onclick="loadProfile('12')">● 12mm</button>
           <button class="prof-btn" data-key="custom" onclick="loadProfile('custom')">✏️ Propio</button>
         </div>
+        <div id="fewshotNotice" class="fewshot-notice"></div>
         <textarea id="productDesc" rows="2" placeholder="Selecciona un perfil arriba o escribe tu descripción" style="resize:none;line-height:1.5;margin-bottom:8px;font-size:12px" oninput="saveProductDesc()"></textarea>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
-          <select id="sizeMode" style="flex:1;min-width:130px" onchange="qs('#singleSizeWrap').style.display=this.value==='single'?'block':'none';localStorage.setItem('sizeMode',this.value)">
+          <select id="sizeMode" style="flex:1;min-width:130px" onchange="qs('#singleSizeWrap').style.display=this.value==='single'?'block':'none';localStorage.setItem('sizeMode',this.value);updateFewshotNotice()">
             <option value="single">Un solo tamaño</option>
             <option value="multi">Clasificar 4/8/12mm</option>
           </select>
           <div id="singleSizeWrap" style="min-width:90px">
-            <select id="singleSize" onchange="localStorage.setItem('singleSize',this.value)">
+            <select id="singleSize" onchange="localStorage.setItem('singleSize',this.value);updateFewshotNotice()">
               <option value="4">4 mm</option>
               <option value="8" selected>8 mm</option>
               <option value="12">12 mm</option>
@@ -218,12 +220,6 @@
           <div class="metric m-green"> <div class="m-label">8 mm</div>  <div class="m-value" id="c8">0</div>  <div class="m-sub">mediano</div></div>
           <div class="metric m-orange"><div class="m-label">12 mm</div> <div class="m-value" id="c12">0</div> <div class="m-sub">grande</div></div>
           <div class="metric m-total"> <div class="m-label">Total</div> <div class="m-value" id="cT">0</div>  <div class="m-sub">todas</div></div>
-        </div>
-
-        <!-- Barra comparación albarán -->
-        <div class="alb-bar" id="albaranBar">
-          <div class="alb-row"><span class="alb-label">Albarán</span><div class="alb-track"><div class="alb-fill alb-ref" id="albBarRef" style="width:100%"></div></div><span class="alb-num" id="albBarRefNum">—</span></div>
-          <div class="alb-row"><span class="alb-label">Contado</span><div class="alb-track"><div class="alb-fill" id="albBarCounted" style="width:0%"></div></div><span class="alb-num" id="albBarCountedNum">—</span></div>
         </div>
 
         <!-- Ajuste manual ±1 -->
@@ -322,6 +318,9 @@
         <button onclick="clearHistory()" style="font-size:11px;padding:6px 10px;color:var(--orange);border-color:var(--orange)">🗑 Borrar</button>
       </div>
       <div id="historyList"></div>
+
+      <p style="font-size:13px;font-weight:700;margin-top:24px;margin-bottom:12px">📸 Mis ejemplos guardados</p>
+      <div id="historyExamplesList"></div>
     </div>
 
     <!-- ══ AJUSTES ══ -->
@@ -344,21 +343,21 @@
       <div class="card">
         <p class="card-label">Acerca de</p>
         <div style="font-size:12px;color:var(--muted);line-height:2.2">
-          <div><strong style="color:var(--text)">Pellet Counter v7.7</strong></div>
+          <div><strong style="color:var(--text)">Pellet Counter v7.8</strong></div>
           <div>Motor IA · Claude Sonnet Vision</div>
           <div>Modo zonas · subtotales por cuadrante, sin llamada extra</div>
-          <div>Barra albarán · comparación visual verde/naranja/rojo</div>
-          <div>Contador few-shot · en la barra superior, por tamaño</div>
+          <div>Comparación albarán · texto claro con emoji</div>
+          <div>Contador few-shot · iconos de color en la barra superior</div>
+          <div>Aviso few-shot activo · en la card de análisis desde 3 ejemplos</div>
           <div>Vibración + pantalla activa · durante el análisis (móvil)</div>
           <div>Modo horizontal · foto y controles lado a lado</div>
           <div>Autoevaluación de confianza · aviso si es media/baja</div>
-          <div>Guardar ejemplo · foto (400px) + conteo final, gestionable en Ajustes</div>
+          <div>Guardar ejemplo · foto (400px) + conteo final, con aviso grande</div>
           <div>Few-shot automático · usa los 2 ejemplos más recientes del mismo tamaño</div>
+          <div>Historial · notas resumidas, iconos de confianza y tamaño</div>
           <div>Multifoto · suma automática de grupos</div>
           <div>Ajuste manual · ±1 post-análisis</div>
           <div>Perfiles · 4mm / 8mm / 12mm optimizados</div>
-          <div>Verificación · albarán automática</div>
-          <div>Historial · últimos 50 análisis</div>
           <div>Gravimétrico · báscula de precisión</div>
           <div>Escalable · añade cualquier producto</div>
           <div>Coste por análisis (foto única, sin ejemplos) · ~0.002€</div>
@@ -377,13 +376,13 @@
   <button class="btn-primary" id="installBtn" style="flex-shrink:0">Instalar</button>
 </div>
 
-<!-- splash v7.7 -->
+<!-- splash v7.8 -->
 <div id="splash" style="position:fixed;inset:0;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:9999;transition:opacity 0.4s">
   <div style="font-size:44px;margin-bottom:14px">⬤</div>
   <div style="font-size:20px;font-weight:700;color:var(--text);letter-spacing:-0.5px">Pellet Counter</div>
   <div style="font-size:12px;color:var(--green);font-weight:600;margin-top:6px;display:flex;align-items:center;gap:8px">
     <span>✦ Claude AI</span><span style="color:var(--hint)">·</span>
-    <span style="font-family:monospace;color:var(--blue)">v7.7</span>
+    <span style="font-family:monospace;color:var(--blue)">v7.8</span>
   </div>
   <div style="margin-top:28px;width:60px;height:2px;background:var(--surface2);border-radius:2px;overflow:hidden">
     <div style="height:100%;background:linear-gradient(90deg,var(--blue),var(--green));border-radius:2px;animation:load 1.3s ease-out forwards"></div>
