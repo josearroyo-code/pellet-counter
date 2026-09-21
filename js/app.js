@@ -1,23 +1,26 @@
 /* ══════════════════════════════════════════
-   Pellet Counter v7.8 — fixes de tests reales en Android
-   FIX: "Vista normal" no ocultaba el overlay de zonas —
-        [hidden] empataba en especificidad con .zone-overlay
-        y perdía. Regla .zone-overlay[hidden] añadida.
-   FIX: barra visual de albarán reemplazada por texto simple
-        con emoji (más robusto en dispositivos reales).
-   NUEVO: toast grande centrado (3s) al guardar un ejemplo,
-          verde si va bien, naranja con causa si falla.
-   NUEVO: vibración en patrón [100,50,100] al completar un
-          análisis, vibración corta al guardar un ejemplo.
-   NUEVO: contador de ejemplos en la barra superior con
-          iconos de color por tamaño, más grande y visible.
-   NUEVO: aviso "Few-shot activo" en la card de Contar desde
-          3 ejemplos del mismo tamaño.
-   NUEVO: historial con notas truncadas a 60 caracteres,
-          icono de confianza y badge de tamaño; sección
-          "Mis ejemplos guardados" al final.
-   NUEVO: en Ajustes, progreso "X/5 — few-shot parcial/
-          completamente activo" por tamaño.
+   Pellet Counter v7.8 (patch .1) — perfiles reales + fixes
+   NUEVO: perfiles 4/8/12mm reescritos a partir de foto real —
+          color rosado/malva → marrón/gris oscuro según luz,
+          hilo metálico fino a veces doblado.
+   FIX CRÍTICO: si Claude no devuelve JSON válido, se reintenta
+          UNA vez con un prompt ultra-simple antes de mostrar
+          error al usuario.
+   NUEVO: recarga automática de la app cuando el Service Worker
+          se actualiza, para que los fixes lleguen sin tener que
+          cerrar y reabrir la PWA manualmente.
+   NUEVO: historial muestra el valor original de la IA y la
+          corrección manual por separado ("IA: 36 → ✏️ 40 (+4)"),
+          notas truncadas a 80 caracteres.
+   NUEVO: estadísticas de precisión por tamaño en Ajustes — nº de
+          análisis, error medio y tendencia sobre/subconteo,
+          calculado sobre análisis con corrección manual.
+   NUEVO: breakpoint 768px (tablet/Surface) — botones y tarjetas
+          más grandes, landscape más generoso con la foto.
+   v7.8:  FIX real de "Vista normal" (colisión de especificidad
+          CSS con [hidden]), albarán como texto simple, toast
+          grande al guardar ejemplo, vibración en patrón,
+          contador con iconos de color, aviso few-shot activo.
    v7.7:  Modo zonas, contador few-shot, vibración, WakeLock,
           layout horizontal.
    v7.6:  FIX "Guardar como ejemplo" — redimensiona a 400px,
@@ -52,9 +55,9 @@ const qs  = s => document.querySelector(s);
 const qsa = s => document.querySelectorAll(s);
 
 const PELLET_PROFILES = {
-  '4':  `Electrodos de disco de plata sinterizada de 4mm de diámetro. Son discos circulares MUY PEQUEÑOS, color marrón claro o marrón oscuro dependiendo de la exposición a la luz, con un hilo fino de conexión saliendo del centro. INSTRUCCIONES CRÍTICAS: son extremadamente pequeños y tienden a agruparse. Examina cada zona con detalle — si ves una masa o grupo asume múltiples discos individuales y cuenta cada punto circular por separado. Cuenta cada disco individualmente aunque se toquen o solapen. Ignora completamente los hilos, solo cuenta los discos circulares.`,
-  '8':  `Electrodos de disco de plata sinterizada de 8mm de diámetro. Son discos circulares de tamaño mediano, color marrón claro o marrón oscuro dependiendo de la exposición a la luz, con un hilo fino de conexión saliendo del centro. Cuando dos discos se toquen o solapen parcialmente cuenta cada uno como unidad independiente. Ignora completamente los hilos, solo cuenta los discos circulares.`,
-  '12': `Electrodos de disco de plata sinterizada de 12mm de diámetro. Son discos circulares GRANDES, color marrón claro o marrón oscuro dependiendo de la exposición a la luz, con un hilo fino de conexión saliendo del centro. Son fáciles de distinguir individualmente. Cuenta cada disco por separado aunque se toquen en los bordes. Ignora completamente los hilos, solo cuenta los discos circulares.`
+  '12': "Electrodos de disco sinterizado de 12mm de diámetro. Son los discos MÁS GRANDES de la imagen. Color rosado, malva o marrón dependiendo de la exposición a la luz — pueden verse claros (rosado/beige) o más oscuros (marrón). Tienen un hilo fino metálico de conexión saliendo del centro, a veces doblado o pegado al disco y difícil de ver. Cuenta cada disco circular grande individualmente aunque se toquen o solapen en los bordes. Ignora completamente los hilos metálicos.",
+  '8':  "Electrodos de disco sinterizado de 8mm de diámetro. Son discos de tamaño MEDIANO, más pequeños que los de 12mm pero más grandes que los de 4mm. Color rosado, malva o marrón dependiendo de la exposición a la luz. Tienen un hilo fino metálico saliendo del centro. Cuando dos discos se toquen o solapen parcialmente cuenta cada uno como unidad independiente. Ignora completamente los hilos metálicos, solo cuenta los discos circulares.",
+  '4':  "Electrodos de disco sinterizado de 4mm de diámetro. Son los discos MÁS PEQUEÑOS de la imagen. Color rosado o marrón claro cuando son nuevos, se vuelven gris oscuro o marrón oscuro con la exposición a la luz. Tienen un hilo fino metálico saliendo del centro, muy difícil de ver a esta escala. INSTRUCCIONES CRÍTICAS: son extremadamente pequeños. Si ves una zona con varios puntos oscuros juntos, asume que son múltiples discos individuales y cuenta cada punto circular por separado. Cuenta cada disco individualmente aunque se toquen o solapen. Ignora completamente los hilos metálicos."
 };
 
 /* ══ INIT ══ */
@@ -109,7 +112,7 @@ window.switchTab = function(name) {
   qsa('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
   qsa('.panel').forEach(p => p.classList.toggle('active', p.id === 'panel-' + name));
   if (name === 'history') { renderHistory(); renderHistoryExamples(); }
-  if (name === 'settings') renderExamplesSettings();
+  if (name === 'settings') { renderExamplesSettings(); renderStats(); }
 };
 
 /* ══ SETTINGS ══ */
@@ -322,7 +325,7 @@ window.confirmMultiTotal = function() {
   buildOdoo();
   saveHistoryEntry({
     date:new Date().toLocaleDateString('es-ES')+' '+new Date().toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'}),
-    total:multiTotal,size4:counts.c4,size8:counts.c8,size12:counts.c12,
+    total:multiTotal,aiTotal:multiTotal,size4:counts.c4,size8:counts.c8,size12:counts.c12,
     product:(qs('#productDesc').value||'').slice(0,60),confidence:'alta',
     notes:`Multifoto ${multifotos.length} fotos · ${breakdown}`,
     albaran:alb||null,odoo:buildOdooText()
@@ -398,21 +401,38 @@ RESPONDE EXCLUSIVAMENTE CON ESTE JSON. CERO palabras antes o después. CERO mark
 
 Sustituye los 0 por los conteos reales. confidence: "alta" "media" o "baja". notes: string o null.`;
 
-  async function callClaude(prompt) {
-    const fewShot=sizeMode==='single'?buildFewShotBlocks(singleSize):[];
+  async function askClaude(promptText, includeFewShot) {
+    const fewShot=(includeFewShot&&sizeMode==='single')?buildFewShotBlocks(singleSize):[];
     const res=await fetch('https://api.anthropic.com/v1/messages',{
       method:'POST',
       headers:{'Content-Type':'application/json','x-api-key':apiKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
       body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:300,messages:[{role:'user',content:[
         ...fewShot,
         {type:'image',source:{type:'base64',media_type:lastImageMime,data:lastImageBase64}},
-        {type:'text',text:prompt}
+        {type:'text',text:promptText}
       ]}]})
     });
     if(!res.ok){const err=await res.json();throw new Error(err.error?.message||`HTTP ${res.status}`);}
     const data=await res.json();
-    let text=data.content[0].text.trim().replace(/```json|```/g,'').trim();
-    if(!text.startsWith('{')){const m=text.match(/\{[\s\S]*?"total"[\s\S]*?\}/);if(m)text=m[0];else throw new Error('La IA no devolvió JSON. Pulsa "Analizar de nuevo".');}
+    return data.content[0].text.trim().replace(/```json|```/g,'').trim();
+  }
+
+  function extractJson(text){
+    if(text.startsWith('{'))return text;
+    const m=text.match(/\{[\s\S]*?\}/);
+    return m?m[0]:null;
+  }
+
+  async function callClaude(prompt) {
+    let text=extractJson(await askClaude(prompt,true));
+    if(!text){
+      /* FIX CRÍTICO: reintento único con prompt ultra-simple antes de rendirse */
+      const simplePrompt=sizeMode==='single'
+        ?`Cuenta cuántos discos circulares hay en esta imagen. Responde EXCLUSIVAMENTE con este JSON, sin ningún texto antes ni después: {"total": 0}. Sustituye el 0 por el número real que cuentes.`
+        :`Cuenta discos circulares y clasifícalos por tamaño relativo: pequeños en "small", medianos en "medium", grandes en "large". Responde EXCLUSIVAMENTE con este JSON, sin texto antes ni después: {"small":0,"medium":0,"large":0,"total":0}. Sustituye los 0 por los números reales.`;
+      text=extractJson(await askClaude(simplePrompt,false));
+      if(!text)throw new Error('La IA no devolvió JSON tras reintentar. Pulsa "Analizar de nuevo".');
+    }
     const r=JSON.parse(text);
     r.total=r.total||(r.small||0)+(r.medium||0)+(r.large||0);
     return r;
@@ -453,7 +473,7 @@ Sustituye los 0 por los conteos reales. confidence: "alta" "media" o "baja". not
     buildOdoo();
     saveHistoryEntry({
       date:new Date().toLocaleDateString('es-ES')+' '+new Date().toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'}),
-      total,size4:counts.c4,size8:counts.c8,size12:counts.c12,
+      total,aiTotal:total,size4:counts.c4,size8:counts.c8,size12:counts.c12,
       product:(qs('#productDesc').value||'').slice(0,60),
       confidence:result.confidence,notes:result.notes,albaran:albaranQty||null,odoo:buildOdooText()
     });
@@ -502,6 +522,7 @@ window.adjustCount = function(delta) {
   qs('#cT').textContent=counts.total;buildOdoo();
   renderAlbaranStatus(counts.total,parseInt(qs('#albaranQty').value)||0);
   if(zonesActive)exitZonesView();
+  updateLastHistoryTotal(counts.total,counts.c4,counts.c8,counts.c12);
   showToast(`Total ajustado: ${counts.total} uds`);
 };
 
@@ -805,6 +826,11 @@ function saveHistoryEntry(entry){
   const h=loadHistory();h.unshift(entry);if(h.length>50)h.pop();
   localStorage.setItem('analysisHistory',JSON.stringify(h));updateHistoryBadge();
 }
+function updateLastHistoryTotal(newTotal,size4,size8,size12){
+  const h=loadHistory(); if(h.length===0)return;
+  h[0].total=newTotal; h[0].size4=size4; h[0].size8=size8; h[0].size12=size12;
+  localStorage.setItem('analysisHistory',JSON.stringify(h));
+}
 function updateHistoryBadge(){const h=loadHistory(),b=qs('#historyBadge');if(b)b.textContent=h.length>0?h.length:'';}
 window.renderHistory=function(){
   const el=qs('#historyList');if(!el)return;
@@ -813,15 +839,19 @@ window.renderHistory=function(){
   const confIcon={alta:'🟢',media:'🟡',baja:'🔴'};
   const sizeDot={4:'🔵',8:'🟢',12:'🟠'};
   el.innerHTML=h.map((e,i)=>{
-    const notesShort=e.notes?(e.notes.length>60?e.notes.slice(0,60)+'...':e.notes):'';
+    const notesShort=e.notes?(e.notes.length>80?e.notes.slice(0,80)+'...':e.notes):'';
     const sizesUsed=[e.size4>0?4:null,e.size8>0?8:null,e.size12>0?12:null].filter(Boolean);
     const sizeBadge=sizesUsed.length===1
       ?`<span style="font-size:11px;font-weight:700">${sizeDot[sizesUsed[0]]} ${sizesUsed[0]}mm:${e['size'+sizesUsed[0]]}</span>`
       :sizesUsed.map(s=>`<span style="font-size:11px">${sizeDot[s]} ${s}mm:${e['size'+s]}</span>`).join(' ');
+    const wasCorrected=e.aiTotal!==undefined&&e.aiTotal!==e.total;
+    const totalDisplay=wasCorrected
+      ?`<span style="font-size:13px;font-weight:700">IA: ${e.aiTotal} → ✏️ ${e.total} (${e.total-e.aiTotal>0?'+':''}${e.total-e.aiTotal})</span>`
+      :`<span style="font-size:15px;font-weight:700">${e.total} uds</span>`;
     return `<div style="background:var(--surface);border:0.5px solid var(--border);border-radius:var(--radius);padding:12px;margin-bottom:10px">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px">
-        <span style="font-size:15px;font-weight:700">${e.total} uds</span>
-        <span style="font-size:16px" title="Confianza ${e.confidence||'—'}">${confIcon[e.confidence]||'—'}</span>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px;gap:8px">
+        ${totalDisplay}
+        <span style="font-size:16px;flex-shrink:0" title="Confianza ${e.confidence||'—'}">${confIcon[e.confidence]||'—'}</span>
       </div>
       <div style="font-size:11px;color:var(--muted);margin-bottom:4px">${e.date}</div>
       ${notesShort?`<div style="font-size:11px;color:var(--hint);font-style:italic;margin-bottom:6px">${notesShort}</div>`:''}
@@ -836,8 +866,60 @@ window.renderHistory=function(){
 window.copyHistEntry=function(i){const h=loadHistory();if(h[i]?.odoo)navigator.clipboard.writeText(h[i].odoo).then(()=>showToast('Copiado ✓'));};
 window.clearHistory=function(){if(!confirm('¿Borrar todo el historial?'))return;localStorage.removeItem('analysisHistory');updateHistoryBadge();renderHistory();};
 
+/* ══ ESTADÍSTICAS DE PRECISIÓN ══ */
+function computeStats() {
+  const bySize={'4':[],'8':[],'12':[]};
+  loadHistory().forEach(e=>{
+    if(e.aiTotal===undefined)return;
+    const sizesUsed=[e.size4>0?'4':null,e.size8>0?'8':null,e.size12>0?'12':null].filter(Boolean);
+    if(sizesUsed.length!==1)return;
+    bySize[sizesUsed[0]].push(e);
+  });
+  const stats={};
+  ['4','8','12'].forEach(size=>{
+    const entries=bySize[size];
+    const corrected=entries.filter(e=>e.total!==e.aiTotal);
+    stats[size]={
+      totalAnalyses:entries.length,
+      correctedCount:corrected.length,
+      avgAbsError:corrected.length?corrected.reduce((s,e)=>s+Math.abs(e.total-e.aiTotal),0)/corrected.length:null,
+      avgSignedError:corrected.length?corrected.reduce((s,e)=>s+(e.total-e.aiTotal),0)/corrected.length:null
+    };
+  });
+  return stats;
+}
+function renderStats() {
+  const el=qs('#statsPanel'); if(!el)return;
+  const stats=computeStats();
+  const sizeLabel={'4':'4mm','8':'8mm','12':'12mm'};
+  el.innerHTML=['4','8','12'].map(size=>{
+    const s=stats[size];
+    if(s.totalAnalyses===0){
+      return `<div style="padding:10px 0;border-top:0.5px solid var(--border);font-size:12px;color:var(--muted)">${sizeLabel[size]}: sin análisis aún</div>`;
+    }
+    let trend,trendColor;
+    if(s.correctedCount===0){ trend='Sin correcciones registradas'; trendColor='var(--muted)'; }
+    else if(s.avgSignedError>0.3){ trend=`tiende a SUBCONTAR (${s.avgSignedError>0?'+':''}${s.avgSignedError.toFixed(1)} uds de media)`; trendColor='var(--blue)'; }
+    else if(s.avgSignedError<-0.3){ trend=`tiende a SOBRECONTAR (${s.avgSignedError.toFixed(1)} uds de media)`; trendColor='var(--orange)'; }
+    else { trend='sin sesgo claro'; trendColor='var(--green)'; }
+    return `<div style="padding:10px 0;border-top:0.5px solid var(--border)">
+      <div style="font-size:12px;font-weight:700;margin-bottom:4px">${sizeLabel[size]} · ${s.totalAnalyses} análisis (${s.correctedCount} con corrección manual)</div>
+      ${s.correctedCount>0?`<div style="font-size:11px;color:var(--muted);margin-bottom:2px">Error medio: ±${s.avgAbsError.toFixed(1)} uds</div>`:''}
+      <div style="font-size:11px;color:${trendColor}">${trend}</div>
+    </div>`;
+  }).join('');
+}
+
 /* ══ PWA ══ */
 let deferredPrompt;
 window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();deferredPrompt=e;const b=qs('#installBanner');if(b)b.style.display='flex';});
 qs('#installBtn')&&qs('#installBtn').addEventListener('click',async()=>{if(!deferredPrompt)return;deferredPrompt.prompt();await deferredPrompt.userChoice;deferredPrompt=null;qs('#installBanner').style.display='none';});
-if('serviceWorker'in navigator)window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js'));
+if('serviceWorker'in navigator){
+  window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js'));
+  /* recarga automática cuando un SW nuevo toma el control, para que las
+     actualizaciones (fixes) lleguen sin tener que cerrar y reabrir la app */
+  let swReloaded=false;
+  navigator.serviceWorker.addEventListener('controllerchange',()=>{
+    if(swReloaded)return; swReloaded=true; window.location.reload();
+  });
+}

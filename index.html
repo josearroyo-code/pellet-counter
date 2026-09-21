@@ -100,6 +100,19 @@
       .count-left{order:1;flex:0 0 55%;max-width:55%;}
       .count-right{order:2;flex:0 0 45%;max-width:45%;}
     }
+
+    /* ── tablet/Surface: controles más grandes ── */
+    @media (min-width:768px){
+      button{font-size:14px;padding:11px 18px;}
+      .adj-btn{width:52px;height:52px;font-size:26px;}
+      .card{padding:18px;}
+      .content{padding:20px 24px calc(var(--safe-bot)+70px);}
+      .prof-bar button{font-size:13px;padding:9px 6px;}
+    }
+    @media (orientation:landscape) and (min-width:768px){
+      .count-left{flex:0 0 58%;max-width:58%;}
+      .count-right{flex:0 0 42%;max-width:42%;}
+    }
   </style>
 </head>
 <body>
@@ -341,10 +354,20 @@
         <div id="examplesSettings"></div>
       </div>
       <div class="card">
+        <p class="card-label">📊 Estadísticas de precisión</p>
+        <p style="font-size:11px;color:var(--hint);margin-bottom:6px;line-height:1.5">Basado en análisis donde has hecho una corrección manual ±1.</p>
+        <div id="statsPanel"></div>
+      </div>
+      <div class="card">
         <p class="card-label">Acerca de</p>
         <div style="font-size:12px;color:var(--muted);line-height:2.2">
           <div><strong style="color:var(--text)">Pellet Counter v7.8</strong></div>
           <div>Motor IA · Claude Sonnet Vision</div>
+          <div>Perfiles actualizados · color rosado/malva a marrón/gris según luz</div>
+          <div>Reintento JSON · un intento extra con prompt simple antes de fallar</div>
+          <div>Estadísticas de precisión · error medio y tendencia por tamaño</div>
+          <div>Historial · IA vs corrección manual, iconos y badges</div>
+          <div>Tablet/Surface · controles más grandes desde 768px</div>
           <div>Modo zonas · subtotales por cuadrante, sin llamada extra</div>
           <div>Comparación albarán · texto claro con emoji</div>
           <div>Contador few-shot · iconos de color en la barra superior</div>
@@ -354,10 +377,8 @@
           <div>Autoevaluación de confianza · aviso si es media/baja</div>
           <div>Guardar ejemplo · foto (400px) + conteo final, con aviso grande</div>
           <div>Few-shot automático · usa los 2 ejemplos más recientes del mismo tamaño</div>
-          <div>Historial · notas resumidas, iconos de confianza y tamaño</div>
           <div>Multifoto · suma automática de grupos</div>
           <div>Ajuste manual · ±1 post-análisis</div>
-          <div>Perfiles · 4mm / 8mm / 12mm optimizados</div>
           <div>Gravimétrico · báscula de precisión</div>
           <div>Escalable · añade cualquier producto</div>
           <div>Coste por análisis (foto única, sin ejemplos) · ~0.002€</div>
