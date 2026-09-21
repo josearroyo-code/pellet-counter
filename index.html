@@ -122,7 +122,7 @@
     <h1>Pellet Counter <span class="ai-badge">✦ Claude AI</span></h1>
     <div style="display:flex;align-items:center;gap:10px">
       <div id="analyzeSpinner" class="spinner"></div>
-      <span class="ver">v7.8</span>
+      <span class="ver">v7.9</span>
     </div>
   </div>
   <div class="subbar" id="exCounts"></div>
@@ -263,7 +263,7 @@
       </div>
 
       <div class="btn-row" style="margin-top:10px">
-        <button id="btnZones" style="display:none" onclick="toggleZones()">⊞ Zonas</button>
+        <button id="btnZones" style="display:none">⊞ Zonas</button>
         <button id="btnRecount" style="display:none" onclick="runCount()">↺ Analizar de nuevo</button>
       </div>
 
@@ -354,23 +354,23 @@
         <div id="examplesSettings"></div>
       </div>
       <div class="card">
-        <p class="card-label">📊 Estadísticas de precisión</p>
-        <p style="font-size:11px;color:var(--hint);margin-bottom:6px;line-height:1.5">Basado en análisis donde has hecho una corrección manual ±1.</p>
-        <div id="statsPanel"></div>
+        <p class="card-label">🎯 Estado del entrenamiento</p>
+        <p style="font-size:11px;color:var(--hint);margin-bottom:10px;line-height:1.5">Muestras, ejemplos guardados, error y tendencia por tamaño.</p>
+        <div id="trainingDashboard"></div>
       </div>
       <div class="card">
         <p class="card-label">Acerca de</p>
         <div style="font-size:12px;color:var(--muted);line-height:2.2">
-          <div><strong style="color:var(--text)">Pellet Counter v7.8</strong></div>
+          <div><strong style="color:var(--text)">Pellet Counter v7.9</strong></div>
           <div>Motor IA · Claude Sonnet Vision</div>
+          <div>Historial sin conflicto de color · confianza con icono+texto, tamaño con badge sólido</div>
+          <div>Estado del entrenamiento · tabla y barras de progreso por tamaño</div>
+          <div>Contador topbar · muestreos y ejemplos por separado</div>
+          <div>Modo zonas · addEventListener + aviso grande si hay pocos pellets</div>
           <div>Perfiles actualizados · color rosado/malva a marrón/gris según luz</div>
           <div>Reintento JSON · un intento extra con prompt simple antes de fallar</div>
-          <div>Estadísticas de precisión · error medio y tendencia por tamaño</div>
-          <div>Historial · IA vs corrección manual, iconos y badges</div>
           <div>Tablet/Surface · controles más grandes desde 768px</div>
-          <div>Modo zonas · subtotales por cuadrante, sin llamada extra</div>
           <div>Comparación albarán · texto claro con emoji</div>
-          <div>Contador few-shot · iconos de color en la barra superior</div>
           <div>Aviso few-shot activo · en la card de análisis desde 3 ejemplos</div>
           <div>Vibración + pantalla activa · durante el análisis (móvil)</div>
           <div>Modo horizontal · foto y controles lado a lado</div>
@@ -397,13 +397,13 @@
   <button class="btn-primary" id="installBtn" style="flex-shrink:0">Instalar</button>
 </div>
 
-<!-- splash v7.8 -->
+<!-- splash v7.9 -->
 <div id="splash" style="position:fixed;inset:0;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:9999;transition:opacity 0.4s">
   <div style="font-size:44px;margin-bottom:14px">⬤</div>
   <div style="font-size:20px;font-weight:700;color:var(--text);letter-spacing:-0.5px">Pellet Counter</div>
   <div style="font-size:12px;color:var(--green);font-weight:600;margin-top:6px;display:flex;align-items:center;gap:8px">
     <span>✦ Claude AI</span><span style="color:var(--hint)">·</span>
-    <span style="font-family:monospace;color:var(--blue)">v7.8</span>
+    <span style="font-family:monospace;color:var(--blue)">v7.9</span>
   </div>
   <div style="margin-top:28px;width:60px;height:2px;background:var(--surface2);border-radius:2px;overflow:hidden">
     <div style="height:100%;background:linear-gradient(90deg,var(--blue),var(--green));border-radius:2px;animation:load 1.3s ease-out forwards"></div>

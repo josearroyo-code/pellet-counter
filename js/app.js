@@ -1,22 +1,21 @@
 /* ══════════════════════════════════════════
-   Pellet Counter v7.8 (patch .1) — perfiles reales + fixes
-   NUEVO: perfiles 4/8/12mm reescritos a partir de foto real —
-          color rosado/malva → marrón/gris oscuro según luz,
-          hilo metálico fino a veces doblado.
-   FIX CRÍTICO: si Claude no devuelve JSON válido, se reintenta
-          UNA vez con un prompt ultra-simple antes de mostrar
-          error al usuario.
-   NUEVO: recarga automática de la app cuando el Service Worker
-          se actualiza, para que los fixes lleguen sin tener que
-          cerrar y reabrir la PWA manualmente.
-   NUEVO: historial muestra el valor original de la IA y la
-          corrección manual por separado ("IA: 36 → ✏️ 40 (+4)"),
-          notas truncadas a 80 caracteres.
-   NUEVO: estadísticas de precisión por tamaño en Ajustes — nº de
-          análisis, error medio y tendencia sobre/subconteo,
-          calculado sobre análisis con corrección manual.
-   NUEVO: breakpoint 768px (tablet/Surface) — botones y tarjetas
-          más grandes, landscape más generoso con la foto.
+   Pellet Counter v7.9 — UI/UX de tests reales en Android
+   FIX: botón Zonas usa addEventListener en vez de onclick
+        inline; el caso "≤30 pellets" (motivo real de que
+        pareciera "no responder") ahora usa el toast grande.
+   NUEVO: historial sin conflicto de color — confianza con
+          icono de FORMA distinta + texto (✅ alta / ⚠️ media /
+          ❌ baja), tamaño como badge de fondo sólido blanco.
+          Corrección manual: "IA: 36 → ✏️ 40 (+4 corregido)".
+   NUEVO: "Estado del entrenamiento" en Ajustes — tabla por
+          tamaño (muestras, ejemplos, error, tendencia,
+          precisión) + barra de progreso ASCII por tamaño.
+   NUEVO: contador de la topbar muestra muestreos Y ejemplos
+          ("4mm 0m/0e"), colores distintos para cada uno,
+          se actualiza tras cada análisis.
+   v7.8 (patch .1): perfiles 4/8/12mm reescritos a partir de
+          foto real, reintento JSON, recarga automática de SW,
+          historial IA vs corrección, estadísticas, tablet 768px.
    v7.8:  FIX real de "Vista normal" (colisión de especificidad
           CSS con [hidden]), albarán como texto simple, toast
           grande al guardar ejemplo, vibración en patrón,
@@ -35,7 +34,7 @@
    Fix: JSON parser robusto
    ══════════════════════════════════════════ */
 
-const VERSION = 'v7.8';
+const VERSION = 'v7.9';
 let lastImageBase64 = null;
 let lastImageMime   = 'image/jpeg';
 let isAnalyzing     = false;
@@ -66,6 +65,9 @@ document.addEventListener('DOMContentLoaded', () => {
   renderProductSelector(); renderExampleCounts(); updateFewshotNotice();
   const ap = localStorage.getItem('activeProfile');
   if (ap) setTimeout(() => highlightProfile(ap), 100);
+  /* FIX: addEventListener en vez de onclick inline para el botón de zonas */
+  const btnZones = document.getElementById('btnZones');
+  if (btnZones) btnZones.addEventListener('click', toggleZones);
 });
 
 /* ══ UTILS ══ */
@@ -330,6 +332,7 @@ window.confirmMultiTotal = function() {
     notes:`Multifoto ${multifotos.length} fotos · ${breakdown}`,
     albaran:alb||null,odoo:buildOdooText()
   });
+  renderExampleCounts();
   showToast(`Total ${multiTotal} uds ✓`);
   vibrateDone();
 };
@@ -477,6 +480,7 @@ Sustituye los 0 por los conteos reales. confidence: "alta" "media" o "baja". not
       product:(qs('#productDesc').value||'').slice(0,60),
       confidence:result.confidence,notes:result.notes,albaran:albaranQty||null,odoo:buildOdooText()
     });
+    renderExampleCounts();
     vibrateDone();
   } catch(err) {
     setStatus('statusCount','✗ '+err.message,'#f97316');showToast(err.message,true);
@@ -546,7 +550,7 @@ function largestRemainderRound(values, total) {
 window.toggleZones = function() {
   if(zonesActive){ exitZonesView(); return; }
   const total=counts.total;
-  if(total<=30){ showToast('Pocos pellets, vista normal suficiente'); return; }
+  if(total<=30){ showBigToast('Pocos pellets (≤30) — vista normal ya es suficiente'); return; }
   const big=total>=81, n=big?3:2;
   enterZonesView(n,n,total);
 };
@@ -586,15 +590,13 @@ const FEWSHOT_MIN = 3;
 
 function renderExampleCounts() {
   const el = qs('#exCounts'); if (!el) return;
-  const examples = getReferenceExamples();
-  const counts4 = { '4':0, '8':0, '12':0 };
-  examples.forEach(e => { if (counts4[e.size] !== undefined) counts4[e.size]++; });
-  const dot = { '4':'🔵', '8':'🟢', '12':'🟠' };
+  const stats = computeStats();
+  /* m = muestreos (análisis), e = ejemplos guardados — colores distintos para no confundirlos */
   el.innerHTML = ['4','8','12'].map(s => {
-    const n = counts4[s];
-    const num = n>=FEWSHOT_TARGET ? `<span class="ok">${n}✓</span>` : n;
-    return `${dot[s]} ${s}mm:${num}`;
-  }).join('&nbsp;&nbsp;&nbsp;');
+    const st = stats[s];
+    const eDone = st.exampleCount >= FEWSHOT_TARGET;
+    return `<span>${s}mm <span style="color:var(--muted)">${st.totalAnalyses}m</span>/<span style="color:${eDone?'var(--green)':'var(--blue)'};font-weight:800">${st.exampleCount}e${eDone?'✓':''}</span></span>`;
+  }).join('<span style="color:var(--hint)"> · </span>');
 }
 
 function updateFewshotNotice() {
@@ -836,26 +838,37 @@ window.renderHistory=function(){
   const el=qs('#historyList');if(!el)return;
   const h=loadHistory();
   if(h.length===0){el.innerHTML='<p style="color:var(--muted);font-size:13px;text-align:center;padding:24px">Sin análisis aún</p>';return;}
-  const confIcon={alta:'🟢',media:'🟡',baja:'🔴'};
-  const sizeDot={4:'🔵',8:'🟢',12:'🟠'};
+  /* Confianza: icono de FORMA distinta (no solo color) + texto siempre visible,
+     para no chocar visualmente con los colores de los badges de tamaño. */
+  const confDisplay={
+    alta:{icon:'✅',label:'alta',color:'var(--green)'},
+    media:{icon:'⚠️',label:'media',color:'var(--orange)'},
+    baja:{icon:'❌',label:'baja',color:'var(--red)'}
+  };
+  /* Tamaño: fondo sólido + texto blanco, distinto de los colores de confianza */
+  const sizeBg={4:'var(--blue-dim)',8:'var(--green-dim)',12:'var(--orange-dim)'};
   el.innerHTML=h.map((e,i)=>{
     const notesShort=e.notes?(e.notes.length>80?e.notes.slice(0,80)+'...':e.notes):'';
     const sizesUsed=[e.size4>0?4:null,e.size8>0?8:null,e.size12>0?12:null].filter(Boolean);
     const sizeBadge=sizesUsed.length===1
-      ?`<span style="font-size:11px;font-weight:700">${sizeDot[sizesUsed[0]]} ${sizesUsed[0]}mm:${e['size'+sizesUsed[0]]}</span>`
-      :sizesUsed.map(s=>`<span style="font-size:11px">${sizeDot[s]} ${s}mm:${e['size'+s]}</span>`).join(' ');
+      ?`<span style="font-size:11px;font-weight:700;color:#fff;background:${sizeBg[sizesUsed[0]]};padding:2px 9px;border-radius:10px">● ${sizesUsed[0]}mm</span>`
+      :sizesUsed.map(s=>`<span style="font-size:11px;font-weight:700;color:#fff;background:${sizeBg[s]};padding:2px 9px;border-radius:10px;margin-right:4px">● ${s}mm:${e['size'+s]}</span>`).join('');
     const wasCorrected=e.aiTotal!==undefined&&e.aiTotal!==e.total;
     const totalDisplay=wasCorrected
-      ?`<span style="font-size:13px;font-weight:700">IA: ${e.aiTotal} → ✏️ ${e.total} (${e.total-e.aiTotal>0?'+':''}${e.total-e.aiTotal})</span>`
+      ?`<span style="font-size:13px;font-weight:700">IA: ${e.aiTotal} → ✏️ ${e.total} (${e.total-e.aiTotal>0?'+':''}${e.total-e.aiTotal} corregido)</span>`
       :`<span style="font-size:15px;font-weight:700">${e.total} uds</span>`;
+    const cd=confDisplay[e.confidence];
+    const confBadge=cd
+      ?`<span style="font-size:12px;font-weight:700;color:${cd.color};display:inline-flex;align-items:center;gap:3px;flex-shrink:0">${cd.icon} ${cd.label}</span>`
+      :`<span style="font-size:12px;color:var(--muted);flex-shrink:0">—</span>`;
     return `<div style="background:var(--surface);border:0.5px solid var(--border);border-radius:var(--radius);padding:12px;margin-bottom:10px">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px;gap:8px">
         ${totalDisplay}
-        <span style="font-size:16px;flex-shrink:0" title="Confianza ${e.confidence||'—'}">${confIcon[e.confidence]||'—'}</span>
+        ${confBadge}
       </div>
       <div style="font-size:11px;color:var(--muted);margin-bottom:4px">${e.date}</div>
       ${notesShort?`<div style="font-size:11px;color:var(--hint);font-style:italic;margin-bottom:6px">${notesShort}</div>`:''}
-      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:8px;align-items:center">
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;align-items:center">
         ${sizeBadge}
         ${e.albaran?`<span style="font-size:11px;color:var(--muted)">Albarán:${e.albaran}</span>`:''}
       </div>
@@ -866,7 +879,7 @@ window.renderHistory=function(){
 window.copyHistEntry=function(i){const h=loadHistory();if(h[i]?.odoo)navigator.clipboard.writeText(h[i].odoo).then(()=>showToast('Copiado ✓'));};
 window.clearHistory=function(){if(!confirm('¿Borrar todo el historial?'))return;localStorage.removeItem('analysisHistory');updateHistoryBadge();renderHistory();};
 
-/* ══ ESTADÍSTICAS DE PRECISIÓN ══ */
+/* ══ ESTADO DEL ENTRENAMIENTO (dashboard en Ajustes) ══ */
 function computeStats() {
   const bySize={'4':[],'8':[],'12':[]};
   loadHistory().forEach(e=>{
@@ -875,6 +888,7 @@ function computeStats() {
     if(sizesUsed.length!==1)return;
     bySize[sizesUsed[0]].push(e);
   });
+  const examples=getReferenceExamples();
   const stats={};
   ['4','8','12'].forEach(size=>{
     const entries=bySize[size];
@@ -882,33 +896,42 @@ function computeStats() {
     stats[size]={
       totalAnalyses:entries.length,
       correctedCount:corrected.length,
+      exampleCount:examples.filter(e=>e.size===size).length,
       avgAbsError:corrected.length?corrected.reduce((s,e)=>s+Math.abs(e.total-e.aiTotal),0)/corrected.length:null,
-      avgSignedError:corrected.length?corrected.reduce((s,e)=>s+(e.total-e.aiTotal),0)/corrected.length:null
+      avgSignedError:corrected.length?corrected.reduce((s,e)=>s+(e.total-e.aiTotal),0)/corrected.length:null,
+      precisionPct:entries.length?Math.round((entries.length-corrected.length)/entries.length*100):null
     };
   });
   return stats;
 }
-function renderStats() {
-  const el=qs('#statsPanel'); if(!el)return;
-  const stats=computeStats();
-  const sizeLabel={'4':'4mm','8':'8mm','12':'12mm'};
-  el.innerHTML=['4','8','12'].map(size=>{
-    const s=stats[size];
-    if(s.totalAnalyses===0){
-      return `<div style="padding:10px 0;border-top:0.5px solid var(--border);font-size:12px;color:var(--muted)">${sizeLabel[size]}: sin análisis aún</div>`;
-    }
-    let trend,trendColor;
-    if(s.correctedCount===0){ trend='Sin correcciones registradas'; trendColor='var(--muted)'; }
-    else if(s.avgSignedError>0.3){ trend=`tiende a SUBCONTAR (${s.avgSignedError>0?'+':''}${s.avgSignedError.toFixed(1)} uds de media)`; trendColor='var(--blue)'; }
-    else if(s.avgSignedError<-0.3){ trend=`tiende a SOBRECONTAR (${s.avgSignedError.toFixed(1)} uds de media)`; trendColor='var(--orange)'; }
-    else { trend='sin sesgo claro'; trendColor='var(--green)'; }
-    return `<div style="padding:10px 0;border-top:0.5px solid var(--border)">
-      <div style="font-size:12px;font-weight:700;margin-bottom:4px">${sizeLabel[size]} · ${s.totalAnalyses} análisis (${s.correctedCount} con corrección manual)</div>
-      ${s.correctedCount>0?`<div style="font-size:11px;color:var(--muted);margin-bottom:2px">Error medio: ±${s.avgAbsError.toFixed(1)} uds</div>`:''}
-      <div style="font-size:11px;color:${trendColor}">${trend}</div>
-    </div>`;
-  }).join('');
+function trainingBarHTML(size,count){
+  const filled='█'.repeat(Math.min(count,FEWSHOT_TARGET));
+  const empty='░'.repeat(Math.max(0,FEWSHOT_TARGET-count));
+  const status=count===0?'inactivo':count>=FEWSHOT_TARGET?'activo':'parcial';
+  const color=count===0?'var(--muted)':count>=FEWSHOT_TARGET?'var(--green)':'var(--blue)';
+  return `<div style="font-family:'SF Mono','Fira Code',monospace;font-size:12px;margin-bottom:6px">
+    <span style="color:var(--muted)">${size}mm:</span> <span style="color:${color}">[${filled}${empty}]</span> ${count}/${FEWSHOT_TARGET} ejemplos — few-shot ${status}
+  </div>`;
 }
+window.renderStats = function renderStats() {
+  const el=qs('#trainingDashboard'); if(!el)return;
+  const stats=computeStats();
+  const sizes=['4','8','12'];
+  const row=(label,fn)=>`<tr><td style="padding:5px 4px;color:var(--muted);font-weight:700;text-align:left;border-top:0.5px solid var(--border)">${label}</td>${sizes.map(s=>`<td style="padding:5px 4px;text-align:center;border-top:0.5px solid var(--border)">${fn(stats[s])}</td>`).join('')}</tr>`;
+  const table=`<div style="overflow-x:auto;margin-bottom:14px"><table style="width:100%;border-collapse:collapse;font-size:11px;min-width:280px">
+    <thead><tr>
+      <th></th>${sizes.map(s=>`<th style="padding:5px 4px;color:var(--text);font-size:11px;border-bottom:1px solid var(--border2)">${s}mm</th>`).join('')}
+    </tr></thead>
+    <tbody>
+      ${row('Muest.',s=>s.totalAnalyses===0?'—':s.totalAnalyses)}
+      ${row('Ejem.',s=>`${s.exampleCount}/${FEWSHOT_TARGET}`)}
+      ${row('Error',s=>s.totalAnalyses===0?'—':(s.correctedCount===0?'±0':'±'+Math.round(s.avgAbsError)))}
+      ${row('Tend.',s=>s.totalAnalyses===0?'—':(s.correctedCount===0?'OK':(s.avgSignedError>0.3?'sub':s.avgSignedError<-0.3?'sobre':'OK')))}
+      ${row('Prec.',s=>s.totalAnalyses===0?'—':s.precisionPct+'%')}
+    </tbody>
+  </table></div>`;
+  el.innerHTML=table+sizes.map(s=>trainingBarHTML(s,stats[s].exampleCount)).join('');
+};
 
 /* ══ PWA ══ */
 let deferredPrompt;
