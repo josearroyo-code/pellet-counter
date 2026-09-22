@@ -1,6 +1,26 @@
 /* ══════════════════════════════════════════
-   Pellet Counter v7.9.2 — Pesada rápida
-   NUEVO: modo "⚖️ Pesada rápida de lote" en tab Pesar — el
+   Pellet Counter v7.9.3 — precisión real + reorganización Pesar
+   NUEVO: mensajes de precisión de Pesada rápida actualizados con
+          test físico real (4mm ±1-2/20, 8mm ±2/200, 12mm ±0/94) —
+          eliminado el aviso de "precisión limitada" en 4mm, los
+          datos reales lo desmienten.
+   NUEVO: eliminado el módulo gravimétrico clásico (tara manual +
+          peso total) — Pesada rápida lo sustituye por completo.
+          "Pesos unitarios" pasa a card colapsable ("⚙️ Editar
+          pesos"), oculta por defecto; Pesada rápida es ahora la
+          sección principal, siempre visible.
+   NUEVO: botón "📷 Verificar con visión IA" tras el resultado de
+          báscula — lleva a Contar con el tamaño y el albarán
+          pre-rellenados con el resultado pesado (flujo báscula
+          cuenta → visión confirma → export Odoo).
+   NUEVO: Historial con sub-tabs 📷 Visión IA / ⚖️ Báscula —
+          contador propio en cada uno, por defecto muestra ambos.
+   NUEVO: contador de pesadas en la topbar, separado del contador
+          de análisis de visión IA.
+   NUEVO: card "📐 Precisión verificada con datos reales" en
+          Ajustes, con la tabla del test físico de hoy.
+   NUEVO: nota de procedimiento en 4 pasos numerados en tab Pesar.
+   v7.9.2: modo "⚖️ Pesada rápida de lote" en tab Pesar — el
           operario ya hace la tara en la báscula física, así que
           solo pide el peso NETO y calcula unidades en vivo al
           escribir (sin botón), reutilizando los pesos unitarios
@@ -47,7 +67,7 @@
    Fix: JSON parser robusto
    ══════════════════════════════════════════ */
 
-const VERSION = 'v7.9.2';
+const VERSION = 'v7.9.3';
 let lastImageBase64 = null;
 let lastImageMime   = 'image/jpeg';
 let isAnalyzing     = false;
@@ -75,8 +95,8 @@ const PELLET_PROFILES = {
 
 /* ══ INIT ══ */
 document.addEventListener('DOMContentLoaded', () => {
-  restoreSettings(); initGrav(); loadHistory(); updateHistoryBadge();
-  renderProductSelector(); renderExampleCounts(); updateFewshotNotice();
+  restoreSettings(); initUnitWeights(); loadHistory(); updateHistoryBadge();
+  renderProductSelector(); renderExampleCounts(); updateFewshotNotice(); renderWeighCounts();
   selectQuickSize(quickSize);
   const ap = localStorage.getItem('activeProfile');
   if (ap) setTimeout(() => highlightProfile(ap), 100);
@@ -837,51 +857,29 @@ function buildOdooText(){
 window.buildOdoo=function(){const el=qs('#odooBlock');if(el)el.textContent=buildOdooText();};
 window.copyOdoo=function(){navigator.clipboard.writeText(buildOdooText()).then(()=>showToast('Copiado ✓'));};
 
-/* ══ GRAVIMÉTRICO ══ */
-function initGrav(){
+/* ══ PESOS UNITARIOS ══
+   El módulo gravimétrico clásico (tara manual + peso total) se
+   eliminó en v7.9.3 — Pesada rápida lo sustituye por completo.
+   Esto solo carga/guarda los pesos unitarios, compartidos con ella. */
+function initUnitWeights(){
   const w=JSON.parse(localStorage.getItem('unitWeights')||'{}');
   if(qs('#w4'))qs('#w4').value=w.p4||UNIT_WEIGHTS.p4;
   if(qs('#w8'))qs('#w8').value=w.p8||UNIT_WEIGHTS.p8;
   if(qs('#w12'))qs('#w12').value=w.p12||UNIT_WEIGHTS.p12;
-  updateScaleNote();
 }
-/* Estimación de error de báscula 0.01g sobre 100 uds, a partir del peso unitario:
-   resolución 0.01g repartida sobre 100 unidades ≈ (0.01/2)/peso_unitario uds de error. */
-const SCALE_NOTES={
-  '4': '⚖️ Báscula 0.01g → error ±12 uds en 100. Recomendado: usar visión IA.',
-  '8': '⚖️ Báscula 0.01g → error ±3 uds en 100. Precisión buena ✅',
-  '12':'⚖️ Báscula 0.01g → error ±1 ud en 100. Precisión excelente ✅'
+window.toggleWeightsCard=function(){
+  const el=qs('#pesosCard'),btn=qs('#btnTogglePesos');
+  const show=el.style.display==='none';
+  el.style.display=show?'block':'none';
+  btn.textContent=show?'⚙️ Ocultar pesos':'⚙️ Editar pesos';
 };
-function updateScaleNote(){
-  const el=qs('#scaleNote'); if(!el) return;
-  const size=qs('#gravSize')?.value;
-  el.textContent=SCALE_NOTES[size]||'';
-}
-window.calcGrav=function(){
-  const size=qs('#gravSize').value,total=parseFloat(qs('#gravTotal').value),tare=parseFloat(qs('#gravTare').value)||0;
-  const w4=parseFloat(qs('#w4').value)||UNIT_WEIGHTS.p4,w8=parseFloat(qs('#w8').value)||UNIT_WEIGHTS.p8,w12=parseFloat(qs('#w12').value)||UNIT_WEIGHTS.p12;
-  localStorage.setItem('unitWeights',JSON.stringify({p4:w4,p8:w8,p12:w12}));
-  if(!total||total<=0){setStatus('statusGrav','Introduce el peso total.');return;}
-  const netW=total-tare;if(netW<=0){setStatus('statusGrav','Peso neto 0.');return;}
-  const unitW=size==='4'?w4:size==='8'?w8:w12,qty=Math.round(netW/unitW);
-  counts={c4:size==='4'?qty:0,c8:size==='8'?qty:0,c12:size==='12'?qty:0,total:qty};
-  qs('#gravQty').textContent=qty.toLocaleString('es-ES');qs('#gravNet').textContent=netW.toFixed(3)+' g';qs('#gravUnit').textContent=unitW.toFixed(3)+' g';
-  qs('#gravResult').style.display='block';qs('#exportBoxGrav').style.display='block';
-  buildOdooGrav(size,qty);setStatus('statusGrav',`Resultado: ${qty.toLocaleString('es-ES')} uds pellet ${size}mm`);
+window.saveUnitWeights=function(){
+  localStorage.setItem('unitWeights',JSON.stringify({
+    p4:parseFloat(qs('#w4').value)||UNIT_WEIGHTS.p4,
+    p8:parseFloat(qs('#w8').value)||UNIT_WEIGHTS.p8,
+    p12:parseFloat(qs('#w12').value)||UNIT_WEIGHTS.p12
+  }));
 };
-function buildOdooGrav(size,qty){
-  const prov=qs('#gExProveedor').value||'—',po=qs('#gExPO').value||'—',pref=qs('#gExLote').value||'P',ubic=qs('#gExUbic').value||'WH/Stock';
-  const now=new Date(),seq=Math.floor(Math.random()*900)+100,pad=n=>String(n).padStart(3,'0');
-  const net=(parseFloat(qs('#gravTotal').value||0)-(parseFloat(qs('#gravTare').value)||0)).toFixed(3);
-  qs('#odooBlockGrav').textContent=['=== RECEPCIÓN PELLETS (GRAVIMÉTRICO) ===',
-    `Fecha:        ${now.toLocaleDateString('es-ES')}  ${now.toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'})}`,
-    `Proveedor:    ${prov}`,`PO:           ${po}`,`Ubicación:    ${ubic}`,'---',
-    `Pellet ${size}mm   |  Lote: ${pref}-${size}MM-${pad(seq)}  |  Cant: ${qty.toLocaleString('es-ES')}`,
-    '---',`Peso neto:    ${net} g`,`Motor:        báscula de precisión`,
-  ].join('\n');
-}
-window.updateOdooGrav=function(){const size=qs('#gravSize').value,qty=parseInt(qs('#gravQty').textContent.replace(/\D/g,''))||0;if(qty>0)buildOdooGrav(size,qty);};
-window.copyOdooGrav=function(){navigator.clipboard.writeText(qs('#odooBlockGrav').textContent).then(()=>showToast('Copiado ✓'));};
 
 /* ══ PESADA RÁPIDA ══
    El operario ya hace la tara en la báscula física — la app recibe
@@ -893,10 +891,13 @@ let lastQuickResult=null;
 let lastQuickSavedKey=null;
 
 const QUICK_ERROR_PER_100={'4':12,'8':3,'12':1};
+/* Verificado con test físico real el 22/09/2026: 4mm 20 calc vs 19 real (±1),
+   8mm 202 vs 200 (±2), 12mm 94 vs 94 (±0). La báscula funciona bien en los
+   tres tamaños — el aviso de "precisión limitada" en 4mm quedó desmentido. */
 const QUICK_PRECISION_NOTES={
-  '4': '⚠️ Precisión limitada — recomendado verificar con visión IA',
-  '8': '✅ Error máximo ±3 uds por cada 100',
-  '12':'✅ Error máximo ±1 ud por cada 100'
+  '4': '✅ Precisión real verificada: ±1-2 uds en 20 uds (test real)',
+  '8': '✅ Precisión real verificada: ±2 uds en 200 uds (test real)',
+  '12':'✅ Precisión real verificada: ±0 uds en 94 uds (test real)'
 };
 
 window.selectQuickSize=function(size){
@@ -970,6 +971,26 @@ function saveQuickHistoryEntry({size,net,unitW,qty}){
     product:'Pesada rápida',notes:null,albaran:null,
     odoo:buildQuickOdooText()
   });
+  renderWeighCounts();
+}
+
+/* ══ VERIFICACIÓN CRUZADA: báscula cuenta → visión confirma ══ */
+window.verifyWithVision=function(){
+  if(!lastQuickResult)return;
+  const {size,qty}=lastQuickResult;
+  loadProfile(size);
+  qs('#albaranQty').value=qty;
+  switchTab('count');
+};
+
+function renderWeighCounts(){
+  const el=qs('#weighCounts'); if(!el) return;
+  const counts={'4':0,'8':0,'12':0};
+  loadHistory().filter(e=>e.method==='weigh').forEach(e=>{
+    const sizesUsed=[e.size4>0?'4':null,e.size8>0?'8':null,e.size12>0?'12':null].filter(Boolean);
+    if(sizesUsed.length===1)counts[sizesUsed[0]]++;
+  });
+  el.innerHTML='⚖️ '+['4','8','12'].map(s=>`${s}mm:${counts[s]}`).join(' · ');
 }
 
 /* ══ HISTORIAL ══ */
@@ -984,9 +1005,28 @@ function updateLastHistoryTotal(newTotal,size4,size8,size12){
   localStorage.setItem('analysisHistory',JSON.stringify(h));
 }
 function updateHistoryBadge(){const h=loadHistory(),b=qs('#historyBadge');if(b)b.textContent=h.length>0?h.length:'';}
+
+/* ══ FILTRO HISTORIAL: Visión IA / Báscula ══
+   Por defecto ('all') se muestran ambos tipos juntos. Pulsar un
+   sub-tab filtra a ese tipo; pulsarlo de nuevo vuelve a 'all'. */
+let historyFilter='all';
+window.filterHistory=function(type){
+  historyFilter=(historyFilter===type)?'all':type;
+  qsa('.hist-subtab').forEach(b=>b.classList.toggle('active',b.dataset.histsub===historyFilter));
+  renderHistory();
+};
 window.renderHistory=function(){
   const el=qs('#historyList');if(!el)return;
-  const h=loadHistory();
+  /* _i conserva el índice REAL en analysisHistory (para copyHistEntry),
+     distinto de la posición dentro de la lista ya filtrada por sub-tab. */
+  let h=loadHistory().map((e,i)=>({...e,_i:i}));
+  const visionCount=h.filter(e=>e.method!=='weigh').length;
+  const weighCount=h.filter(e=>e.method==='weigh').length;
+  const tv=qs('#histTabVision'),tw=qs('#histTabWeigh');
+  if(tv)tv.textContent=`📷 Visión IA · ${visionCount}`;
+  if(tw)tw.textContent=`⚖️ Báscula · ${weighCount}`;
+  if(historyFilter==='vision')h=h.filter(e=>e.method!=='weigh');
+  else if(historyFilter==='weigh')h=h.filter(e=>e.method==='weigh');
   if(h.length===0){el.innerHTML='<p style="color:var(--muted);font-size:13px;text-align:center;padding:24px">Sin análisis aún</p>';return;}
   /* Confianza: icono de FORMA distinta (no solo color) + texto siempre visible,
      para no chocar visualmente con los colores de los badges de tamaño. */
@@ -997,7 +1037,7 @@ window.renderHistory=function(){
   };
   /* Tamaño: fondo sólido + texto blanco, distinto de los colores de confianza */
   const sizeBg={4:'var(--blue-dim)',8:'var(--green-dim)',12:'var(--orange-dim)'};
-  el.innerHTML=h.map((e,i)=>{
+  el.innerHTML=h.map((e)=>{
     const notesShort=e.notes?(e.notes.length>80?e.notes.slice(0,80)+'...':e.notes):'';
     const sizesUsed=[e.size4>0?4:null,e.size8>0?8:null,e.size12>0?12:null].filter(Boolean);
     const sizeBadge=sizesUsed.length===1
@@ -1025,12 +1065,12 @@ window.renderHistory=function(){
         ${sizeBadge}
         ${e.albaran?`<span style="font-size:11px;color:var(--muted)">Albarán:${e.albaran}</span>`:''}
       </div>
-      ${e.odoo?`<button onclick="copyHistEntry(${i})" style="font-size:11px;padding:5px 10px">📋 Copiar Odoo</button>`:''}
+      ${e.odoo?`<button onclick="copyHistEntry(${e._i})" style="font-size:11px;padding:5px 10px">📋 Copiar Odoo</button>`:''}
     </div>`;
   }).join('');
 };
 window.copyHistEntry=function(i){const h=loadHistory();if(h[i]?.odoo)navigator.clipboard.writeText(h[i].odoo).then(()=>showToast('Copiado ✓'));};
-window.clearHistory=function(){if(!confirm('¿Borrar todo el historial?'))return;localStorage.removeItem('analysisHistory');updateHistoryBadge();renderHistory();};
+window.clearHistory=function(){if(!confirm('¿Borrar todo el historial?'))return;localStorage.removeItem('analysisHistory');updateHistoryBadge();renderHistory();renderWeighCounts();};
 
 /* ══ ESTADO DEL ENTRENAMIENTO (dashboard en Ajustes) ══ */
 function computeStats() {

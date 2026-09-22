@@ -114,6 +114,10 @@
       .count-right{flex:0 0 42%;max-width:42%;}
     }
 
+    /* ── sub-tabs de historial ── */
+    .hist-subtab{flex:1;justify-content:center;font-size:12px;padding:8px 6px;}
+    .hist-subtab.active{background:var(--blue-dim);border-color:var(--blue);color:var(--blue);}
+
     /* ── pesada rápida ── */
     .quick-step-label{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:0.07em;font-weight:700;margin-bottom:6px;}
     .quick-size-btn{flex:1;justify-content:center;font-size:12px;padding:7px 4px;}
@@ -131,10 +135,11 @@
     <h1>Pellet Counter <span class="ai-badge">✦ Claude AI</span></h1>
     <div style="display:flex;align-items:center;gap:10px">
       <div id="analyzeSpinner" class="spinner"></div>
-      <span class="ver">v7.9.2</span>
+      <span class="ver">v7.9.3</span>
     </div>
   </div>
-  <div class="subbar" id="exCounts"></div>
+  <div class="subbar" id="exCounts" style="border-bottom:none;padding-bottom:2px"></div>
+  <div class="subbar" id="weighCounts" style="padding-top:2px"></div>
 
   <div class="tabs">
     <button class="tab active" data-tab="count"    onclick="switchTab('count')">📷 Contar</button>
@@ -288,17 +293,19 @@
 
     <!-- ══ PESAR ══ -->
     <div class="panel" id="panel-grav">
-      <div class="card">
+
+      <button id="btnTogglePesos" onclick="toggleWeightsCard()" style="width:100%;justify-content:center;margin-bottom:12px">⚙️ Editar pesos</button>
+      <div class="card" id="pesosCard" style="display:none">
         <p class="card-label">Pesos unitarios (g)</p>
         <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">
-          <div><label style="font-size:10px;color:var(--muted);display:block;margin-bottom:3px;font-weight:700">4mm</label><input type="number" id="w4" value="0.0811" step="0.0001" min="0.0001"></div>
-          <div><label style="font-size:10px;color:var(--muted);display:block;margin-bottom:3px;font-weight:700">8mm</label><input type="number" id="w8" value="0.3213" step="0.0001" min="0.0001"></div>
-          <div><label style="font-size:10px;color:var(--muted);display:block;margin-bottom:3px;font-weight:700">12mm</label><input type="number" id="w12" value="0.6969" step="0.0001" min="0.0001"></div>
+          <div><label style="font-size:10px;color:var(--muted);display:block;margin-bottom:3px;font-weight:700">4mm</label><input type="number" id="w4" value="0.0811" step="0.0001" min="0.0001" onchange="saveUnitWeights();calcQuickWeigh()"></div>
+          <div><label style="font-size:10px;color:var(--muted);display:block;margin-bottom:3px;font-weight:700">8mm</label><input type="number" id="w8" value="0.3213" step="0.0001" min="0.0001" onchange="saveUnitWeights();calcQuickWeigh()"></div>
+          <div><label style="font-size:10px;color:var(--muted);display:block;margin-bottom:3px;font-weight:700">12mm</label><input type="number" id="w12" value="0.6969" step="0.0001" min="0.0001" onchange="saveUnitWeights();calcQuickWeigh()"></div>
         </div>
         <p style="font-size:11px;color:var(--hint);margin-top:8px">💡 Pesa 10 pellets ÷ 10 para máxima precisión</p>
       </div>
 
-      <!-- ══ PESADA RÁPIDA ══ -->
+      <!-- ══ PESADA RÁPIDA (principal) ══ -->
       <div class="card">
         <p class="card-label">⚖️ Pesada rápida de lote</p>
 
@@ -320,7 +327,8 @@
             <div id="quickErrorLine" class="quick-error-line"></div>
             <div id="quickMeta" class="quick-meta"></div>
           </div>
-          <div id="quickPrecisionNote" class="tip" style="margin-bottom:0"></div>
+          <div id="quickPrecisionNote" class="tip" style="margin-bottom:10px"></div>
+          <button id="btnVerifyVision" class="btn-primary" style="width:100%;justify-content:center" onclick="verifyWithVision()">📷 Verificar con visión IA</button>
         </div>
       </div>
 
@@ -337,47 +345,14 @@
         <div class="btn-row"><button class="btn-primary" onclick="copyQuickOdoo()">📋 Copiar a Odoo</button></div>
       </div>
 
-      <div class="tip">📋 Procedimiento: coloca la bandeja en la báscula → pulsa TARA → vierte los pellets → introduce el peso que marca la pantalla.</div>
+      <div class="tip">
+        <strong>📋 Procedimiento:</strong><br>
+        1. Coloca la bandeja en la báscula<br>
+        2. Pulsa TARA → pantalla a 0<br>
+        3. Vierte todos los pellets del bote<br>
+        4. Introduce el peso que marca la pantalla
+      </div>
 
-      <div class="card">
-        <p class="card-label">Medición</p>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">
-          <div><label style="font-size:10px;color:var(--muted);display:block;margin-bottom:3px;font-weight:700">Tamaño</label>
-            <select id="gravSize" onchange="updateScaleNote()"><option value="4">4mm</option><option value="8" selected>8mm</option><option value="12">12mm</option></select></div>
-          <div><label style="font-size:10px;color:var(--muted);display:block;margin-bottom:3px;font-weight:700">Tara bote vacío (g)</label>
-            <input type="number" id="gravTare" placeholder="0.000" step="0.001" min="0"></div>
-          <div style="grid-column:1/-1">
-            <label style="font-size:10px;color:var(--muted);display:block;margin-bottom:3px;font-weight:700">Peso total bote+pellets (g)</label>
-            <input type="number" id="gravTotal" placeholder="0.000" step="0.001" min="0" style="font-size:18px;font-weight:700;padding:10px">
-          </div>
-        </div>
-        <button class="btn-primary" onclick="calcGrav()" style="width:100%;justify-content:center;padding:12px;font-size:14px">⚖️ Calcular unidades</button>
-      </div>
-      <div class="status-bar" id="statusGrav"></div>
-      <div id="gravResult" style="display:none;margin-bottom:12px">
-        <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:12px">
-          <div class="metric m-total" style="grid-column:1/-1">
-            <div class="m-label">Unidades calculadas</div>
-            <div class="m-value" id="gravQty" style="font-size:40px">0</div>
-            <div class="m-sub">resultado gravimétrico</div>
-          </div>
-          <div class="metric"><div class="m-label">Peso neto</div><div class="m-value" id="gravNet" style="font-size:15px">—</div></div>
-          <div class="metric"><div class="m-label">Peso unitario</div><div class="m-value" id="gravUnit" style="font-size:15px">—</div></div>
-        </div>
-        <div class="export-box" id="exportBoxGrav">
-          <p class="section-label">Exportar a Odoo</p>
-          <div class="export-fields">
-            <div><label>Proveedor</label><input type="text" id="gExProveedor" placeholder="Nombre" oninput="updateOdooGrav()"></div>
-            <div><label>Nº PO</label><input type="text" id="gExPO" placeholder="PO-2026-XXX" oninput="updateOdooGrav()"></div>
-            <div><label>Prefijo lote</label><input type="text" id="gExLote" placeholder="P-2026" oninput="updateOdooGrav()"></div>
-            <div><label>Ubicación</label><input type="text" id="gExUbic" placeholder="WH/Stock" oninput="updateOdooGrav()"></div>
-          </div>
-          <p class="section-label">Vista previa</p>
-          <div class="odoo-block" id="odooBlockGrav">—</div>
-          <div class="btn-row"><button class="btn-primary" onclick="copyOdooGrav()">📋 Copiar</button></div>
-        </div>
-      </div>
-      <div class="tip" id="scaleNote"></div>
       <div class="warn">⚠️ Verifica siempre que cada bote contiene un único tamaño antes de pesar — la báscula no detecta mezclas.</div>
     </div>
 
@@ -387,6 +362,12 @@
         <p style="font-size:13px;font-weight:700">Últimos 50 análisis</p>
         <button onclick="clearHistory()" style="font-size:11px;padding:6px 10px;color:var(--orange);border-color:var(--orange)">🗑 Borrar</button>
       </div>
+
+      <div style="display:flex;gap:8px;margin-bottom:12px">
+        <button id="histTabVision" class="hist-subtab" data-histsub="vision" onclick="filterHistory('vision')">📷 Visión IA · 0</button>
+        <button id="histTabWeigh" class="hist-subtab" data-histsub="weigh" onclick="filterHistory('weigh')">⚖️ Báscula · 0</button>
+      </div>
+
       <div id="historyList"></div>
 
       <p style="font-size:13px;font-weight:700;margin-top:24px;margin-bottom:12px">📸 Mis ejemplos guardados</p>
@@ -416,15 +397,45 @@
         <div id="trainingDashboard"></div>
       </div>
       <div class="card">
+        <p class="card-label">📐 Precisión verificada con datos reales</p>
+        <p style="font-size:11px;color:var(--hint);margin-bottom:10px;line-height:1.5">Test físico con báscula real, 22/09/2026.</p>
+        <div style="overflow-x:auto">
+          <table style="width:100%;border-collapse:collapse;font-size:11px;min-width:260px">
+            <thead><tr>
+              <th></th>
+              <th style="padding:5px 4px;color:var(--text);border-bottom:1px solid var(--border2)">4mm</th>
+              <th style="padding:5px 4px;color:var(--text);border-bottom:1px solid var(--border2)">8mm</th>
+              <th style="padding:5px 4px;color:var(--text);border-bottom:1px solid var(--border2)">12mm</th>
+            </tr></thead>
+            <tbody>
+              <tr>
+                <td style="padding:5px 4px;color:var(--muted);font-weight:700;text-align:left">⚖️ Báscula</td>
+                <td style="text-align:center;padding:5px 4px;color:var(--green);font-weight:700">±1/20uds</td>
+                <td style="text-align:center;padding:5px 4px;color:var(--green);font-weight:700">±2/200uds</td>
+                <td style="text-align:center;padding:5px 4px;color:var(--green);font-weight:700">±0/94uds</td>
+              </tr>
+              <tr>
+                <td style="padding:5px 4px;color:var(--muted);font-weight:700;text-align:left;border-top:0.5px solid var(--border)">📷 Visión</td>
+                <td style="text-align:center;padding:5px 4px;border-top:0.5px solid var(--border);color:var(--muted)">pendiente</td>
+                <td style="text-align:center;padding:5px 4px;border-top:0.5px solid var(--border);color:var(--muted)">pendiente</td>
+                <td style="text-align:center;padding:5px 4px;border-top:0.5px solid var(--border)">±4uds</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div class="card">
         <p class="card-label">Acerca de</p>
         <div style="font-size:12px;color:var(--muted);line-height:2.2">
-          <div><strong style="color:var(--text)">Pellet Counter v7.9.2</strong></div>
+          <div><strong style="color:var(--text)">Pellet Counter v7.9.3</strong></div>
           <div>Motor IA · Claude Sonnet Vision</div>
-          <div>⚖️ Pesada rápida · solo peso neto, cálculo en vivo, sin tara</div>
+          <div>⚖️ Pesada rápida · única sección de báscula, sin tara manual</div>
+          <div>Precisión verificada · con test físico real (ver Ajustes)</div>
+          <div>Verificación cruzada · báscula cuenta → visión confirma</div>
+          <div>Historial con sub-tabs · 📷 Visión IA / ⚖️ Báscula, con contador</div>
           <div>Pesos reales verificados · 4mm 0.081g · 8mm 0.321g · 12mm 0.697g</div>
           <div>Alerta de solapamiento · con acceso directo a multifoto</div>
           <div>Consejo por tamaño en multifoto · máximo recomendado por foto</div>
-          <div>Nota de precisión de báscula · por tamaño, en la pestaña Pesar</div>
           <div>Dashboard de entrenamiento · con recomendación (prompt vs multifoto)</div>
           <div>Miniaturas con borde de confianza · verde/naranja/rojo</div>
           <div>Historial sin conflicto de color · confianza con icono+texto, tamaño con badge sólido</div>
@@ -458,13 +469,13 @@
   <button class="btn-primary" id="installBtn" style="flex-shrink:0">Instalar</button>
 </div>
 
-<!-- splash v7.9.2 -->
+<!-- splash v7.9.3 -->
 <div id="splash" style="position:fixed;inset:0;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:9999;transition:opacity 0.4s">
   <div style="font-size:44px;margin-bottom:14px">⬤</div>
   <div style="font-size:20px;font-weight:700;color:var(--text);letter-spacing:-0.5px">Pellet Counter</div>
   <div style="font-size:12px;color:var(--green);font-weight:600;margin-top:6px;display:flex;align-items:center;gap:8px">
     <span>✦ Claude AI</span><span style="color:var(--hint)">·</span>
-    <span style="font-family:monospace;color:var(--blue)">v7.9.2</span>
+    <span style="font-family:monospace;color:var(--blue)">v7.9.3</span>
   </div>
   <div style="margin-top:28px;width:60px;height:2px;background:var(--surface2);border-radius:2px;overflow:hidden">
     <div style="height:100%;background:linear-gradient(90deg,var(--blue),var(--green));border-radius:2px;animation:load 1.3s ease-out forwards"></div>
