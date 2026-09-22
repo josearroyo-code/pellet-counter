@@ -113,6 +113,15 @@
       .count-left{flex:0 0 58%;max-width:58%;}
       .count-right{flex:0 0 42%;max-width:42%;}
     }
+
+    /* ── pesada rápida ── */
+    .quick-step-label{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:0.07em;font-weight:700;margin-bottom:6px;}
+    .quick-size-btn{flex:1;justify-content:center;font-size:12px;padding:7px 4px;}
+    .quick-result-box{background:var(--surface2);border-radius:var(--radius-lg);padding:20px;text-align:center;margin-bottom:10px;}
+    #quickQty{font-size:48px;font-weight:800;color:var(--green);line-height:1;}
+    .quick-result-sub{font-size:12px;color:var(--muted);margin-top:4px;}
+    .quick-error-line{font-size:12px;color:var(--text);font-weight:700;margin-top:8px;font-family:'SF Mono','Fira Code',monospace;}
+    .quick-meta{font-size:11px;color:var(--hint);margin-top:6px;}
   </style>
 </head>
 <body>
@@ -122,7 +131,7 @@
     <h1>Pellet Counter <span class="ai-badge">✦ Claude AI</span></h1>
     <div style="display:flex;align-items:center;gap:10px">
       <div id="analyzeSpinner" class="spinner"></div>
-      <span class="ver">v7.9.1</span>
+      <span class="ver">v7.9.2</span>
     </div>
   </div>
   <div class="subbar" id="exCounts"></div>
@@ -288,6 +297,48 @@
         </div>
         <p style="font-size:11px;color:var(--hint);margin-top:8px">💡 Pesa 10 pellets ÷ 10 para máxima precisión</p>
       </div>
+
+      <!-- ══ PESADA RÁPIDA ══ -->
+      <div class="card">
+        <p class="card-label">⚖️ Pesada rápida de lote</p>
+
+        <p class="quick-step-label">PASO 1 · Selecciona el tamaño</p>
+        <div class="prof-bar" style="margin-bottom:14px">
+          <button class="quick-size-btn" data-key="4"  onclick="selectQuickSize('4')">● 4mm</button>
+          <button class="quick-size-btn" data-key="8"  onclick="selectQuickSize('8')">● 8mm</button>
+          <button class="quick-size-btn" data-key="12" onclick="selectQuickSize('12')">● 12mm</button>
+        </div>
+
+        <p class="quick-step-label">PASO 2 · Peso neto (después de hacer TARA)</p>
+        <input type="number" id="quickNetWeight" placeholder="0.000" step="0.001" min="0" style="font-size:20px;font-weight:700;padding:12px;margin-bottom:14px" oninput="calcQuickWeigh()" onchange="calcQuickWeigh(true)">
+
+        <div id="quickResultBox" style="display:none">
+          <p class="quick-step-label">PASO 3 · Resultado</p>
+          <div class="quick-result-box">
+            <div id="quickQty">0</div>
+            <div class="quick-result-sub">unidades</div>
+            <div id="quickErrorLine" class="quick-error-line"></div>
+            <div id="quickMeta" class="quick-meta"></div>
+          </div>
+          <div id="quickPrecisionNote" class="tip" style="margin-bottom:0"></div>
+        </div>
+      </div>
+
+      <div class="export-box" id="quickExportBox">
+        <p class="section-label">Exportar a Odoo</p>
+        <div class="export-fields">
+          <div><label>Proveedor</label><input type="text" id="qExProveedor" placeholder="Nombre" oninput="buildQuickOdoo()"></div>
+          <div><label>Nº PO</label><input type="text" id="qExPO" placeholder="PO-2026-XXX" oninput="buildQuickOdoo()"></div>
+          <div><label>Prefijo lote</label><input type="text" id="qExLote" placeholder="P-2026" oninput="buildQuickOdoo()"></div>
+          <div><label>Ubicación</label><input type="text" id="qExUbic" placeholder="WH/Stock" oninput="buildQuickOdoo()"></div>
+        </div>
+        <p class="section-label">Vista previa</p>
+        <div class="odoo-block" id="quickOdooBlock">—</div>
+        <div class="btn-row"><button class="btn-primary" onclick="copyQuickOdoo()">📋 Copiar a Odoo</button></div>
+      </div>
+
+      <div class="tip">📋 Procedimiento: coloca la bandeja en la báscula → pulsa TARA → vierte los pellets → introduce el peso que marca la pantalla.</div>
+
       <div class="card">
         <p class="card-label">Medición</p>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">
@@ -367,8 +418,9 @@
       <div class="card">
         <p class="card-label">Acerca de</p>
         <div style="font-size:12px;color:var(--muted);line-height:2.2">
-          <div><strong style="color:var(--text)">Pellet Counter v7.9.1</strong></div>
+          <div><strong style="color:var(--text)">Pellet Counter v7.9.2</strong></div>
           <div>Motor IA · Claude Sonnet Vision</div>
+          <div>⚖️ Pesada rápida · solo peso neto, cálculo en vivo, sin tara</div>
           <div>Pesos reales verificados · 4mm 0.081g · 8mm 0.321g · 12mm 0.697g</div>
           <div>Alerta de solapamiento · con acceso directo a multifoto</div>
           <div>Consejo por tamaño en multifoto · máximo recomendado por foto</div>
@@ -406,13 +458,13 @@
   <button class="btn-primary" id="installBtn" style="flex-shrink:0">Instalar</button>
 </div>
 
-<!-- splash v7.9.1 -->
+<!-- splash v7.9.2 -->
 <div id="splash" style="position:fixed;inset:0;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:9999;transition:opacity 0.4s">
   <div style="font-size:44px;margin-bottom:14px">⬤</div>
   <div style="font-size:20px;font-weight:700;color:var(--text);letter-spacing:-0.5px">Pellet Counter</div>
   <div style="font-size:12px;color:var(--green);font-weight:600;margin-top:6px;display:flex;align-items:center;gap:8px">
     <span>✦ Claude AI</span><span style="color:var(--hint)">·</span>
-    <span style="font-family:monospace;color:var(--blue)">v7.9.1</span>
+    <span style="font-family:monospace;color:var(--blue)">v7.9.2</span>
   </div>
   <div style="margin-top:28px;width:60px;height:2px;background:var(--surface2);border-radius:2px;overflow:hidden">
     <div style="height:100%;background:linear-gradient(90deg,var(--blue),var(--green));border-radius:2px;animation:load 1.3s ease-out forwards"></div>

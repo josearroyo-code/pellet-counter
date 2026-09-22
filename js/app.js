@@ -1,6 +1,13 @@
 /* ══════════════════════════════════════════
-   Pellet Counter v7.9.1 — pesos reales + más UI/UX Android
-   NUEVO: UNIT_WEIGHTS y PELLET_PROFILES actualizados con pesos
+   Pellet Counter v7.9.2 — Pesada rápida
+   NUEVO: modo "⚖️ Pesada rápida de lote" en tab Pesar — el
+          operario ya hace la tara en la báscula física, así que
+          solo pide el peso NETO y calcula unidades en vivo al
+          escribir (sin botón), reutilizando los pesos unitarios
+          de #w4/#w8/#w12. Resultado grande (48px) + precisión
+          esperada por tamaño + export a Odoo + guarda en
+          Historial con icono ⚖️ (distinto de 📷 visión IA).
+   v7.9.1: UNIT_WEIGHTS y PELLET_PROFILES actualizados con pesos
           reales verificados en báscula de laboratorio (100 uds):
           4mm=0.0811g, 8mm=0.3213g, 12mm=0.6969g. Ya NO pesan
           igual el 4mm y el 12mm (dato viejo, ver Ajustes/Pesar).
@@ -40,7 +47,7 @@
    Fix: JSON parser robusto
    ══════════════════════════════════════════ */
 
-const VERSION = 'v7.9.1';
+const VERSION = 'v7.9.2';
 let lastImageBase64 = null;
 let lastImageMime   = 'image/jpeg';
 let isAnalyzing     = false;
@@ -70,6 +77,7 @@ const PELLET_PROFILES = {
 document.addEventListener('DOMContentLoaded', () => {
   restoreSettings(); initGrav(); loadHistory(); updateHistoryBadge();
   renderProductSelector(); renderExampleCounts(); updateFewshotNotice();
+  selectQuickSize(quickSize);
   const ap = localStorage.getItem('activeProfile');
   if (ap) setTimeout(() => highlightProfile(ap), 100);
   /* FIX: addEventListener en vez de onclick inline para el botón de zonas */
@@ -875,6 +883,95 @@ function buildOdooGrav(size,qty){
 window.updateOdooGrav=function(){const size=qs('#gravSize').value,qty=parseInt(qs('#gravQty').textContent.replace(/\D/g,''))||0;if(qty>0)buildOdooGrav(size,qty);};
 window.copyOdooGrav=function(){navigator.clipboard.writeText(qs('#odooBlockGrav').textContent).then(()=>showToast('Copiado ✓'));};
 
+/* ══ PESADA RÁPIDA ══
+   El operario ya hace la tara en la báscula física — la app recibe
+   directamente el peso NETO. Sin campo de tara, cálculo en vivo al
+   escribir. Usa los mismos pesos unitarios (#w4/#w8/#w12) que el
+   módulo gravimétrico clásico, así una recalibración vale para ambos. */
+let quickSize='8';
+let lastQuickResult=null;
+let lastQuickSavedKey=null;
+
+const QUICK_ERROR_PER_100={'4':12,'8':3,'12':1};
+const QUICK_PRECISION_NOTES={
+  '4': '⚠️ Precisión limitada — recomendado verificar con visión IA',
+  '8': '✅ Error máximo ±3 uds por cada 100',
+  '12':'✅ Error máximo ±1 ud por cada 100'
+};
+
+window.selectQuickSize=function(size){
+  quickSize=size;
+  qsa('.quick-size-btn').forEach(b=>{
+    const active=b.dataset.key===size;
+    b.style.background=active?'var(--blue-dim)':'';
+    b.style.borderColor=active?'var(--blue)':'';
+    b.style.color=active?'var(--blue)':'';
+  });
+  calcQuickWeigh();
+};
+
+function quickUnitWeight(size){
+  const map={'4':'#w4','8':'#w8','12':'#w12'};
+  return parseFloat(qs(map[size])?.value)||UNIT_WEIGHTS['p'+size];
+}
+
+window.calcQuickWeigh=function(commit){
+  const net=parseFloat(qs('#quickNetWeight')?.value);
+  const resultBox=qs('#quickResultBox');
+  if(!net||net<=0){
+    resultBox.style.display='none';
+    qs('#quickExportBox').style.display='none';
+    lastQuickResult=null;
+    return;
+  }
+  const unitW=quickUnitWeight(quickSize);
+  const qty=Math.round(net/unitW);
+  const errEstimate=Math.max(1,Math.round(qty/100*QUICK_ERROR_PER_100[quickSize]));
+  qs('#quickQty').textContent=qty.toLocaleString('es-ES');
+  qs('#quickErrorLine').textContent=`±${errEstimate} ud${errEstimate>1?'s':''} (FC-2000)`;
+  qs('#quickMeta').textContent=`${net.toFixed(3)} g ÷ ${unitW.toFixed(4)} g/ud`;
+  qs('#quickPrecisionNote').textContent=QUICK_PRECISION_NOTES[quickSize]||'';
+  resultBox.style.display='block';
+  qs('#quickExportBox').style.display='block';
+  lastQuickResult={size:quickSize,net,unitW,qty};
+  buildQuickOdoo();
+  if(commit){
+    const key=`${quickSize}_${net}`;
+    if(key!==lastQuickSavedKey){
+      saveQuickHistoryEntry(lastQuickResult);
+      lastQuickSavedKey=key;
+    }
+  }
+};
+
+function buildQuickOdooText(){
+  if(!lastQuickResult)return '—';
+  const prov=qs('#qExProveedor')?.value||'—',po=qs('#qExPO')?.value||'—';
+  const pref=qs('#qExLote')?.value||'P',ubic=qs('#qExUbic')?.value||'WH/Stock';
+  const now=new Date(),seq=Math.floor(Math.random()*900)+100,pad=n=>String(n).padStart(3,'0');
+  const {size,net,qty}=lastQuickResult;
+  return [
+    '=== RECEPCIÓN PELLETS (PESADA RÁPIDA) ===',
+    `Fecha:        ${now.toLocaleDateString('es-ES')}  ${now.toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'})}`,
+    `Proveedor:    ${prov}`,`PO:           ${po}`,`Ubicación:    ${ubic}`,'---',
+    `Pellet ${size}mm   |  Lote: ${pref}-${size}MM-${pad(seq)}  |  Cant: ${qty.toLocaleString('es-ES')}`,
+    '---',`Peso neto:    ${net.toFixed(3)} g`,`Método:       báscula FC-2000 (peso neto)`,
+  ].join('\n');
+}
+window.buildQuickOdoo=function(){const el=qs('#quickOdooBlock');if(el)el.textContent=buildQuickOdooText();};
+window.copyQuickOdoo=function(){navigator.clipboard.writeText(buildQuickOdooText()).then(()=>showToast('Copiado ✓'));};
+
+function saveQuickHistoryEntry({size,net,unitW,qty}){
+  saveHistoryEntry({
+    date:new Date().toLocaleDateString('es-ES')+' '+new Date().toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'}),
+    method:'weigh',
+    total:qty,size4:size==='4'?qty:0,size8:size==='8'?qty:0,size12:size==='12'?qty:0,
+    netWeight:net,unitWeight:unitW,
+    product:'Pesada rápida',notes:null,albaran:null,
+    odoo:buildQuickOdooText()
+  });
+}
+
 /* ══ HISTORIAL ══ */
 function loadHistory(){return JSON.parse(localStorage.getItem('analysisHistory')||'[]');}
 function saveHistoryEntry(entry){
@@ -906,12 +1003,15 @@ window.renderHistory=function(){
     const sizeBadge=sizesUsed.length===1
       ?`<span style="font-size:11px;font-weight:700;color:#fff;background:${sizeBg[sizesUsed[0]]};padding:2px 9px;border-radius:10px">● ${sizesUsed[0]}mm</span>`
       :sizesUsed.map(s=>`<span style="font-size:11px;font-weight:700;color:#fff;background:${sizeBg[s]};padding:2px 9px;border-radius:10px;margin-right:4px">● ${s}mm:${e['size'+s]}</span>`).join('');
-    const wasCorrected=e.aiTotal!==undefined&&e.aiTotal!==e.total;
+    const isWeigh=e.method==='weigh';
+    const wasCorrected=!isWeigh&&e.aiTotal!==undefined&&e.aiTotal!==e.total;
     const totalDisplay=wasCorrected
       ?`<span style="font-size:13px;font-weight:700">IA: ${e.aiTotal} → ✏️ ${e.total} (${e.total-e.aiTotal>0?'+':''}${e.total-e.aiTotal} corregido)</span>`
-      :`<span style="font-size:15px;font-weight:700">${e.total} uds</span>`;
+      :`<span style="font-size:15px;font-weight:700">${isWeigh?'⚖️ ':''}${e.total} uds</span>`;
     const cd=confDisplay[e.confidence];
-    const confBadge=cd
+    const confBadge=isWeigh
+      ?`<span style="font-size:11px;color:var(--muted);flex-shrink:0;font-family:'SF Mono','Fira Code',monospace">${e.netWeight?.toFixed(3)}g÷${e.unitWeight?.toFixed(4)}g</span>`
+      :cd
       ?`<span style="font-size:12px;font-weight:700;color:${cd.color};display:inline-flex;align-items:center;gap:3px;flex-shrink:0">${cd.icon} ${cd.label}</span>`
       :`<span style="font-size:12px;color:var(--muted);flex-shrink:0">—</span>`;
     return `<div style="background:var(--surface);border:0.5px solid var(--border);border-radius:var(--radius);padding:12px;margin-bottom:10px">
