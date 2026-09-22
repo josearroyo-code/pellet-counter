@@ -1,18 +1,24 @@
 /* ══════════════════════════════════════════
-   Pellet Counter v7.9 — UI/UX de tests reales en Android
-   FIX: botón Zonas usa addEventListener en vez de onclick
-        inline; el caso "≤30 pellets" (motivo real de que
-        pareciera "no responder") ahora usa el toast grande.
-   NUEVO: historial sin conflicto de color — confianza con
-          icono de FORMA distinta + texto (✅ alta / ⚠️ media /
-          ❌ baja), tamaño como badge de fondo sólido blanco.
-          Corrección manual: "IA: 36 → ✏️ 40 (+4 corregido)".
-   NUEVO: "Estado del entrenamiento" en Ajustes — tabla por
-          tamaño (muestras, ejemplos, error, tendencia,
-          precisión) + barra de progreso ASCII por tamaño.
-   NUEVO: contador de la topbar muestra muestreos Y ejemplos
-          ("4mm 0m/0e"), colores distintos para cada uno,
-          se actualiza tras cada análisis.
+   Pellet Counter v7.9.1 — pesos reales + más UI/UX Android
+   NUEVO: UNIT_WEIGHTS y PELLET_PROFILES actualizados con pesos
+          reales verificados en báscula de laboratorio (100 uds):
+          4mm=0.0811g, 8mm=0.3213g, 12mm=0.6969g. Ya NO pesan
+          igual el 4mm y el 12mm (dato viejo, ver Ajustes/Pesar).
+   NUEVO: miniaturas (multifoto y ejemplos guardados) con borde
+          de color según confianza del análisis que las generó.
+   NUEVO: alerta de solapamiento — si las notas de Claude
+          mencionan solapamiento, aviso con botón directo para
+          activar multifoto.
+   NUEVO: consejo por tamaño al activar multifoto (máx. por foto).
+   NUEVO: fila "Recom." en el dashboard de entrenamiento —
+          Ajustar prompt si el error es consistente, Multifoto
+          con grupos chicos si el error varía de signo.
+   NUEVO: nota de precisión de báscula por tamaño en tab Pesar.
+   v7.9:  FIX botón Zonas con addEventListener (el "no responde"
+          real era el toast pequeño en ≤30 pellets, ya grande).
+          Historial sin conflicto de color confianza/tamaño.
+          "Estado del entrenamiento" en Ajustes. Contador topbar
+          con muestreos y ejemplos por separado.
    v7.8 (patch .1): perfiles 4/8/12mm reescritos a partir de
           foto real, reintento JSON, recarga automática de SW,
           historial IA vs corrección, estadísticas, tablet 768px.
@@ -34,12 +40,13 @@
    Fix: JSON parser robusto
    ══════════════════════════════════════════ */
 
-const VERSION = 'v7.9';
+const VERSION = 'v7.9.1';
 let lastImageBase64 = null;
 let lastImageMime   = 'image/jpeg';
 let isAnalyzing     = false;
 let counts          = { c4:0, c8:0, c12:0, total:0 };
-const UNIT_WEIGHTS  = { p4:0.12, p8:0.05, p12:0.12 };
+let lastConfidence  = null;
+const UNIT_WEIGHTS  = { p4:0.0811, p8:0.3213, p12:0.6969 };
 
 /* ── estado multifoto ── */
 let multifotos = [];
@@ -54,9 +61,9 @@ const qs  = s => document.querySelector(s);
 const qsa = s => document.querySelectorAll(s);
 
 const PELLET_PROFILES = {
-  '12': "Electrodos de disco sinterizado de 12mm de diámetro. Son los discos MÁS GRANDES de la imagen. Color rosado, malva o marrón dependiendo de la exposición a la luz — pueden verse claros (rosado/beige) o más oscuros (marrón). Tienen un hilo fino metálico de conexión saliendo del centro, a veces doblado o pegado al disco y difícil de ver. Cuenta cada disco circular grande individualmente aunque se toquen o solapen en los bordes. Ignora completamente los hilos metálicos.",
-  '8':  "Electrodos de disco sinterizado de 8mm de diámetro. Son discos de tamaño MEDIANO, más pequeños que los de 12mm pero más grandes que los de 4mm. Color rosado, malva o marrón dependiendo de la exposición a la luz. Tienen un hilo fino metálico saliendo del centro. Cuando dos discos se toquen o solapen parcialmente cuenta cada uno como unidad independiente. Ignora completamente los hilos metálicos, solo cuenta los discos circulares.",
-  '4':  "Electrodos de disco sinterizado de 4mm de diámetro. Son los discos MÁS PEQUEÑOS de la imagen. Color rosado o marrón claro cuando son nuevos, se vuelven gris oscuro o marrón oscuro con la exposición a la luz. Tienen un hilo fino metálico saliendo del centro, muy difícil de ver a esta escala. INSTRUCCIONES CRÍTICAS: son extremadamente pequeños. Si ves una zona con varios puntos oscuros juntos, asume que son múltiples discos individuales y cuenta cada punto circular por separado. Cuenta cada disco individualmente aunque se toquen o solapen. Ignora completamente los hilos metálicos."
+  '4': "Electrodos de disco sinterizado de 4mm de diámetro. Son los discos MÁS PEQUEÑOS de la imagen — significativamente más pequeños que los de 8mm y 12mm. Color rosado o marrón claro cuando son nuevos, se vuelven gris oscuro o marrón oscuro con la exposición a la luz — ambos colores son el mismo producto. Pesan aproximadamente 0.08g cada uno. Tienen un hilo fino metálico saliendo del centro, muy difícil de ver a esta escala. INSTRUCCIONES CRÍTICAS: son extremadamente pequeños y tienden a agruparse. Si ves una zona con varios puntos oscuros juntos, asume que son múltiples discos individuales y cuenta cada punto circular por separado. Cuenta cada disco individualmente aunque se toquen o solapen. Ignora completamente los hilos metálicos — son líneas finas, no discos.",
+  '8': "Electrodos de disco sinterizado de 8mm de diámetro. Son discos de tamaño MEDIANO — más pequeños que los de 12mm pero claramente más grandes que los de 4mm. Color rosado, malva o marrón dependiendo de la exposición a la luz. Pesan aproximadamente 0.32g cada uno. Tienen un hilo fino metálico saliendo del centro. Cuando dos discos se toquen o solapen parcialmente cuenta cada uno como unidad independiente. Si hay solapamiento en zona central agrupa visualmente y estima cuántos discos hay en esa zona. Ignora completamente los hilos metálicos.",
+  '12': "Electrodos de disco sinterizado de 12mm de diámetro. Son los discos MÁS GRANDES de la imagen — notablemente más grandes que los de 8mm. Color rosado, malva o marrón dependiendo de la exposición a la luz — pueden verse claros (rosado/beige) o más oscuros (marrón). Pesan aproximadamente 0.70g cada uno. Tienen un hilo fino metálico de conexión saliendo del centro, a veces doblado o pegado al disco y difícil de ver. Al ser grandes son fáciles de distinguir individualmente. Cuenta cada disco circular grande por separado aunque se toquen en los bordes. Ignora completamente los hilos metálicos."
 };
 
 /* ══ INIT ══ */
@@ -68,6 +75,12 @@ document.addEventListener('DOMContentLoaded', () => {
   /* FIX: addEventListener en vez de onclick inline para el botón de zonas */
   const btnZones = document.getElementById('btnZones');
   if (btnZones) btnZones.addEventListener('click', toggleZones);
+  /* Alerta de solapamiento: botón directo para activar multifoto */
+  const btnActivateMultifoto = document.getElementById('btnActivateMultifoto');
+  if (btnActivateMultifoto) btnActivateMultifoto.addEventListener('click', () => {
+    if (!multiMode) toggleMultiMode();
+    qs('#overlapWarning').style.display = 'none';
+  });
 });
 
 /* ══ UTILS ══ */
@@ -202,6 +215,7 @@ window.toggleMultiMode = function() {
     btn.style.background='var(--green-dim)';btn.style.borderColor='var(--green)';btn.style.color='var(--green)';
     btn.textContent='📚 Multifoto ON';panel.style.display='block';
     resetMulti();
+    updateMultiSizeTip();
     showToast('Modo multifoto activado — añade fotos en grupos de 20-30 pellets');
   } else {
     btn.style.background='';btn.style.borderColor='';btn.style.color='';
@@ -209,6 +223,14 @@ window.toggleMultiMode = function() {
     resetMulti();
   }
 };
+
+/* ══ CONSEJO POR TAMAÑO EN MULTIFOTO ══ */
+const MULTI_SIZE_TIPS={'4':'Máximo 30 por foto','8':'Máximo 25 por foto','12':'Máximo 15 por foto — son grandes'};
+function updateMultiSizeTip(){
+  const el=qs('#multiSizeTip'); if(!el) return;
+  const size=qs('#singleSize')?.value;
+  el.textContent=MULTI_SIZE_TIPS[size]?`💡 ${size}mm: ${MULTI_SIZE_TIPS[size]}`:'';
+}
 
 function resetMulti() { multifotos=[]; multiTotal=0; renderMultiList(); updateMultiTotal(); }
 
@@ -218,9 +240,11 @@ function renderMultiList() {
     el.innerHTML='<p style="color:var(--hint);font-size:12px;text-align:center;padding:12px">Añade fotos del mismo bote en grupos de 20-30 pellets</p>';
     return;
   }
-  el.innerHTML=multifotos.map((f,i)=>`
+  el.innerHTML=multifotos.map((f,i)=>{
+    const confBorder=confBorderColor(f.result?.confidence);
+    return `
     <div style="display:flex;align-items:center;gap:10px;padding:8px;background:var(--surface2);border-radius:var(--radius);margin-bottom:6px;border:0.5px solid var(--border)">
-      <img src="data:${f.mime};base64,${f.base64.slice(0,100)}" style="width:48px;height:48px;object-fit:cover;border-radius:6px;flex-shrink:0;background:var(--surface)">
+      <img src="data:${f.mime};base64,${f.base64.slice(0,100)}" style="width:48px;height:48px;object-fit:cover;border-radius:6px;flex-shrink:0;background:var(--surface);border:2px solid ${confBorder}">
       <div style="flex:1">
         <div style="font-size:14px;font-weight:700;color:${f.result?'var(--text)':'var(--muted)'}">
           ${f.result?f.result.total+' uds':f.analyzing?'⏳ Analizando…':'⏸ En cola'}
@@ -229,8 +253,11 @@ function renderMultiList() {
         ${f.result?.notes?`<div style="font-size:10px;color:var(--hint);font-style:italic">${f.result.notes}</div>`:''}
       </div>
       <button onclick="removeMultiFoto(${i})" style="padding:4px 8px;font-size:11px;color:var(--orange);border-color:var(--orange);flex-shrink:0">✕</button>
-    </div>`
-  ).join('');
+    </div>`;
+  }).join('');
+}
+function confBorderColor(confidence){
+  return {alta:'var(--green)',media:'var(--orange)',baja:'var(--red)'}[confidence]||'var(--border)';
 }
 
 function updateMultiTotal() {
@@ -324,6 +351,7 @@ window.confirmMultiTotal = function() {
   qs('#manualAdj').style.display='flex';
   qs('#btnSaveExample').style.display='none';
   qs('#btnZones').style.display='none'; exitZonesView();
+  lastConfidence='alta';
   buildOdoo();
   saveHistoryEntry({
     date:new Date().toLocaleDateString('es-ES')+' '+new Date().toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'}),
@@ -370,6 +398,7 @@ async function runCountAI() {
   qs('#analyzeSpinner').style.display='block';qs('#btnRecount').disabled=true;
   setStatus('statusCount','🔍 Claude está analizando la imagen…');qs('#statusCount').style.color='';
   qs('#confWarning').style.display='none';
+  qs('#overlapWarning').style.display='none';
   qs('#albaranResult').style.display='none';qs('#resultsCount').style.display='none';
   qs('#exportBox').style.display='none';qs('#manualAdj').style.display='none';qs('#btnSaveExample').style.display='none';
   qs('#btnZones').style.display='none'; exitZonesView();
@@ -470,6 +499,8 @@ Sustituye los 0 por los conteos reales. confidence: "alta" "media" o "baja". not
     } else {
       confWarnEl.style.display='none';
     }
+    lastConfidence=result.confidence;
+    checkOverlapNotice(result.notes);
 
     drawOverlay(total,result.confidence);
     qs('#resultsCount').style.display='block';qs('#exportBox').style.display='block';qs('#manualAdj').style.display='flex';qs('#btnSaveExample').style.display='flex';qs('#btnZones').style.display='';
@@ -497,6 +528,14 @@ function drawOverlay(total,confidence){
   if(ctx.roundRect)ctx.roundRect(10,10,175,58,10);else ctx.rect(10,10,175,58);
   ctx.fill();ctx.fillStyle='#fff';ctx.font='bold 26px -apple-system,sans-serif';ctx.fillText(`${total} uds`,20,44);
   ctx.fillStyle=col;ctx.font='12px -apple-system,sans-serif';ctx.fillText(`Confianza ${confidence}`,20,60);
+}
+
+/* ══ ALERTA DE SOLAPAMIENTO ══ */
+const OVERLAP_KEYWORDS=['solapan','solapa','superponen','superpone','solapamiento','touching','overlapping'];
+function checkOverlapNotice(notes){
+  const el=qs('#overlapWarning'); if(!el) return;
+  const hit=!!notes && OVERLAP_KEYWORDS.some(k=>notes.toLowerCase().includes(k));
+  el.style.display=hit?'flex':'none';
 }
 
 /* ══ COMPARACIÓN ALBARÁN ══ */
@@ -670,6 +709,7 @@ window.saveAsExample = async function() {
       image: resized.base64, mime: resized.mime,
       total: counts.total, size4: counts.c4, size8: counts.c8, size12: counts.c12,
       size: sizeMode === 'single' ? singleSize : null,
+      confidence: lastConfidence,
       product: (qs('#productDesc').value || '').slice(0, 60)
     };
     let examples = getReferenceExamples();
@@ -741,7 +781,7 @@ function buildExamplesGroupsHTML() {
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         ${groups[k].map(e => `
           <div style="position:relative;width:72px">
-            <img src="data:${e.mime};base64,${e.image}" style="width:72px;height:72px;object-fit:cover;border-radius:8px;border:0.5px solid var(--border);display:block">
+            <img src="data:${e.mime};base64,${e.image}" style="width:72px;height:72px;object-fit:cover;border-radius:8px;border:2px solid ${confBorderColor(e.confidence)};display:block">
             <div style="font-size:10px;text-align:center;color:var(--muted);margin-top:2px">${e.total} uds</div>
             <div style="font-size:9px;text-align:center;color:var(--hint)">${e.date}</div>
             <button onclick="deleteExample('${e.id}')" style="position:absolute;top:-6px;right:-6px;width:20px;height:20px;padding:0;border-radius:50%;font-size:10px;line-height:1;background:var(--orange-dim);border-color:var(--orange);color:var(--orange);display:flex;align-items:center;justify-content:center">✕</button>
@@ -795,6 +835,19 @@ function initGrav(){
   if(qs('#w4'))qs('#w4').value=w.p4||UNIT_WEIGHTS.p4;
   if(qs('#w8'))qs('#w8').value=w.p8||UNIT_WEIGHTS.p8;
   if(qs('#w12'))qs('#w12').value=w.p12||UNIT_WEIGHTS.p12;
+  updateScaleNote();
+}
+/* Estimación de error de báscula 0.01g sobre 100 uds, a partir del peso unitario:
+   resolución 0.01g repartida sobre 100 unidades ≈ (0.01/2)/peso_unitario uds de error. */
+const SCALE_NOTES={
+  '4': '⚖️ Báscula 0.01g → error ±12 uds en 100. Recomendado: usar visión IA.',
+  '8': '⚖️ Báscula 0.01g → error ±3 uds en 100. Precisión buena ✅',
+  '12':'⚖️ Báscula 0.01g → error ±1 ud en 100. Precisión excelente ✅'
+};
+function updateScaleNote(){
+  const el=qs('#scaleNote'); if(!el) return;
+  const size=qs('#gravSize')?.value;
+  el.textContent=SCALE_NOTES[size]||'';
 }
 window.calcGrav=function(){
   const size=qs('#gravSize').value,total=parseFloat(qs('#gravTotal').value),tare=parseFloat(qs('#gravTare').value)||0;
@@ -913,6 +966,14 @@ function trainingBarHTML(size,count){
     <span style="color:var(--muted)">${size}mm:</span> <span style="color:${color}">[${filled}${empty}]</span> ${count}/${FEWSHOT_TARGET} ejemplos — few-shot ${status}
   </div>`;
 }
+/* Error consistente (siempre en la misma dirección) sugiere ajustar el
+   prompt; error que varía de signo sugiere que el problema es la foto
+   (amontonamiento), no el prompt — ahí conviene multifoto con grupos chicos. */
+function trainingRecommendation(s){
+  if(s.totalAnalyses===0||s.correctedCount===0)return '—';
+  const consistency=Math.abs(s.avgSignedError)/s.avgAbsError;
+  return consistency>0.6?'Ajustar prompt':'Multifoto, grupos chicos';
+}
 window.renderStats = function renderStats() {
   const el=qs('#trainingDashboard'); if(!el)return;
   const stats=computeStats();
@@ -928,6 +989,7 @@ window.renderStats = function renderStats() {
       ${row('Error',s=>s.totalAnalyses===0?'—':(s.correctedCount===0?'±0':'±'+Math.round(s.avgAbsError)))}
       ${row('Tend.',s=>s.totalAnalyses===0?'—':(s.correctedCount===0?'OK':(s.avgSignedError>0.3?'sub':s.avgSignedError<-0.3?'sobre':'OK')))}
       ${row('Prec.',s=>s.totalAnalyses===0?'—':s.precisionPct+'%')}
+      ${row('Recom.',s=>trainingRecommendation(s))}
     </tbody>
   </table></div>`;
   el.innerHTML=table+sizes.map(s=>trainingBarHTML(s,stats[s].exampleCount)).join('');

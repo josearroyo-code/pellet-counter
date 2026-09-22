@@ -122,7 +122,7 @@
     <h1>Pellet Counter <span class="ai-badge">✦ Claude AI</span></h1>
     <div style="display:flex;align-items:center;gap:10px">
       <div id="analyzeSpinner" class="spinner"></div>
-      <span class="ver">v7.9</span>
+      <span class="ver">v7.9.1</span>
     </div>
   </div>
   <div class="subbar" id="exCounts"></div>
@@ -160,7 +160,7 @@
             <option value="multi">Clasificar 4/8/12mm</option>
           </select>
           <div id="singleSizeWrap" style="min-width:90px">
-            <select id="singleSize" onchange="localStorage.setItem('singleSize',this.value);updateFewshotNotice()">
+            <select id="singleSize" onchange="localStorage.setItem('singleSize',this.value);updateFewshotNotice();updateMultiSizeTip()">
               <option value="4">4 mm</option>
               <option value="8" selected>8 mm</option>
               <option value="12">12 mm</option>
@@ -187,6 +187,7 @@
       <div class="multi-panel" id="multiPanel">
         <p class="card-label">📚 Modo multifoto — grupos de 20-30 pellets</p>
         <div class="tip" style="margin-bottom:10px">💡 Divide el bote en grupos pequeños bien extendidos. Fotografía cada grupo por separado. La app suma automáticamente.</div>
+        <div class="tip" id="multiSizeTip" style="margin-bottom:10px"></div>
 
         <div class="upload-zone" style="padding:16px" onclick="document.getElementById('fileMulti').click()">
           <input type="file" id="fileMulti" accept="image/*" capture="environment" multiple onchange="addMultiFoto(event)">
@@ -224,6 +225,10 @@
 
       <div class="status-bar" id="statusCount"></div>
       <div class="warn" id="confWarning" style="display:none;font-weight:700"></div>
+      <div class="warn" id="overlapWarning" style="display:none;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;font-weight:700">
+        <span>⚠️ Solapamiento detectado</span>
+        <button id="btnActivateMultifoto" style="font-size:11px;padding:6px 10px">📚 Activar multifoto</button>
+      </div>
       <div class="alb-result"  id="albaranResult"></div>
       <div class="canvas-wrap" id="wrapCount"><canvas id="cvCount"></canvas><div id="zoneOverlay" class="zone-overlay" hidden></div></div>
 
@@ -277,9 +282,9 @@
       <div class="card">
         <p class="card-label">Pesos unitarios (g)</p>
         <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">
-          <div><label style="font-size:10px;color:var(--muted);display:block;margin-bottom:3px;font-weight:700">4mm</label><input type="number" id="w4" value="0.120" step="0.001" min="0.001"></div>
-          <div><label style="font-size:10px;color:var(--muted);display:block;margin-bottom:3px;font-weight:700">8mm</label><input type="number" id="w8" value="0.050" step="0.001" min="0.001"></div>
-          <div><label style="font-size:10px;color:var(--muted);display:block;margin-bottom:3px;font-weight:700">12mm</label><input type="number" id="w12" value="0.120" step="0.001" min="0.001"></div>
+          <div><label style="font-size:10px;color:var(--muted);display:block;margin-bottom:3px;font-weight:700">4mm</label><input type="number" id="w4" value="0.0811" step="0.0001" min="0.0001"></div>
+          <div><label style="font-size:10px;color:var(--muted);display:block;margin-bottom:3px;font-weight:700">8mm</label><input type="number" id="w8" value="0.3213" step="0.0001" min="0.0001"></div>
+          <div><label style="font-size:10px;color:var(--muted);display:block;margin-bottom:3px;font-weight:700">12mm</label><input type="number" id="w12" value="0.6969" step="0.0001" min="0.0001"></div>
         </div>
         <p style="font-size:11px;color:var(--hint);margin-top:8px">💡 Pesa 10 pellets ÷ 10 para máxima precisión</p>
       </div>
@@ -287,7 +292,7 @@
         <p class="card-label">Medición</p>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">
           <div><label style="font-size:10px;color:var(--muted);display:block;margin-bottom:3px;font-weight:700">Tamaño</label>
-            <select id="gravSize"><option value="4">4mm</option><option value="8" selected>8mm</option><option value="12">12mm</option></select></div>
+            <select id="gravSize" onchange="updateScaleNote()"><option value="4">4mm</option><option value="8" selected>8mm</option><option value="12">12mm</option></select></div>
           <div><label style="font-size:10px;color:var(--muted);display:block;margin-bottom:3px;font-weight:700">Tara bote vacío (g)</label>
             <input type="number" id="gravTare" placeholder="0.000" step="0.001" min="0"></div>
           <div style="grid-column:1/-1">
@@ -321,7 +326,8 @@
           <div class="btn-row"><button class="btn-primary" onclick="copyOdooGrav()">📋 Copiar</button></div>
         </div>
       </div>
-      <div class="warn">⚠️ Pellet 4mm y 12mm tienen el mismo peso (0.12g). Asegúrate de que cada bote es de un solo tamaño.</div>
+      <div class="tip" id="scaleNote"></div>
+      <div class="warn">⚠️ Verifica siempre que cada bote contiene un único tamaño antes de pesar — la báscula no detecta mezclas.</div>
     </div>
 
     <!-- ══ HISTORIAL ══ -->
@@ -361,13 +367,17 @@
       <div class="card">
         <p class="card-label">Acerca de</p>
         <div style="font-size:12px;color:var(--muted);line-height:2.2">
-          <div><strong style="color:var(--text)">Pellet Counter v7.9</strong></div>
+          <div><strong style="color:var(--text)">Pellet Counter v7.9.1</strong></div>
           <div>Motor IA · Claude Sonnet Vision</div>
+          <div>Pesos reales verificados · 4mm 0.081g · 8mm 0.321g · 12mm 0.697g</div>
+          <div>Alerta de solapamiento · con acceso directo a multifoto</div>
+          <div>Consejo por tamaño en multifoto · máximo recomendado por foto</div>
+          <div>Nota de precisión de báscula · por tamaño, en la pestaña Pesar</div>
+          <div>Dashboard de entrenamiento · con recomendación (prompt vs multifoto)</div>
+          <div>Miniaturas con borde de confianza · verde/naranja/rojo</div>
           <div>Historial sin conflicto de color · confianza con icono+texto, tamaño con badge sólido</div>
-          <div>Estado del entrenamiento · tabla y barras de progreso por tamaño</div>
           <div>Contador topbar · muestreos y ejemplos por separado</div>
           <div>Modo zonas · addEventListener + aviso grande si hay pocos pellets</div>
-          <div>Perfiles actualizados · color rosado/malva a marrón/gris según luz</div>
           <div>Reintento JSON · un intento extra con prompt simple antes de fallar</div>
           <div>Tablet/Surface · controles más grandes desde 768px</div>
           <div>Comparación albarán · texto claro con emoji</div>
@@ -379,7 +389,6 @@
           <div>Few-shot automático · usa los 2 ejemplos más recientes del mismo tamaño</div>
           <div>Multifoto · suma automática de grupos</div>
           <div>Ajuste manual · ±1 post-análisis</div>
-          <div>Gravimétrico · báscula de precisión</div>
           <div>Escalable · añade cualquier producto</div>
           <div>Coste por análisis (foto única, sin ejemplos) · ~0.002€</div>
         </div>
@@ -397,13 +406,13 @@
   <button class="btn-primary" id="installBtn" style="flex-shrink:0">Instalar</button>
 </div>
 
-<!-- splash v7.9 -->
+<!-- splash v7.9.1 -->
 <div id="splash" style="position:fixed;inset:0;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:9999;transition:opacity 0.4s">
   <div style="font-size:44px;margin-bottom:14px">⬤</div>
   <div style="font-size:20px;font-weight:700;color:var(--text);letter-spacing:-0.5px">Pellet Counter</div>
   <div style="font-size:12px;color:var(--green);font-weight:600;margin-top:6px;display:flex;align-items:center;gap:8px">
     <span>✦ Claude AI</span><span style="color:var(--hint)">·</span>
-    <span style="font-family:monospace;color:var(--blue)">v7.9</span>
+    <span style="font-family:monospace;color:var(--blue)">v7.9.1</span>
   </div>
   <div style="margin-top:28px;width:60px;height:2px;background:var(--surface2);border-radius:2px;overflow:hidden">
     <div style="height:100%;background:linear-gradient(90deg,var(--blue),var(--green));border-radius:2px;animation:load 1.3s ease-out forwards"></div>
