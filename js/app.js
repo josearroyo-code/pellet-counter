@@ -1,6 +1,27 @@
 /* ══════════════════════════════════════════
-   Pellet Counter v7.9.4 — fixes urgentes + peso 4mm corregido
-   NUEVO: peso unitario 4mm corregido a 0.071g/ud (antes 0.0811g,
+   Pellet Counter v7.9.5 — sin Odoo, guardado explícito, pesos protegidos
+   FIX: analyzeOneFoto() (multifoto) ya usaba el mismo productDesc que
+          runCountAI (verificado) — se refuerza PELLET_PROFILES para
+          que Claude no confunda los pellets con condensadores
+          cerámicos (visualmente similares: disco pequeño + hilo).
+   RETIRADO: toda la exportación a Odoo (Contar, Pesar, Historial) —
+          código comentado con "// ODOO - pendiente de implementar"
+          en vez de borrado, para poder recuperarlo fácilmente.
+          Historial usa ahora "📋 Copiar resultado" en texto plano.
+   NUEVO: botón "💾 Guardar pesada" explícito en Pesada rápida — ya
+          NO se guarda automáticamente (se quita el debounce de 1.2s
+          y el commit-on-change de v7.9.4), el operario decide qué
+          guardar. El botón pasa a "✓ Guardado" 2s tras pulsarlo.
+   NUEVO: corrección manual en Pesada rápida ahora se ve en Historial
+          igual que en visión IA: "⚖️ 100 uds (calculado) → ✏️ 98 uds
+          (-2 corregido)", vía el nuevo campo `calcTotal`.
+   NUEVO: ajuste manual ±1 en multifoto — global sobre el total
+          acumulado y también foto a foto en cada miniatura.
+   PROTEGIDO: pesos unitarios (#w4/#w8/#w12) ya no son editables desde
+          tab Pesar — se movieron a Ajustes → "Pesos unitarios", tras
+          un PIN simple (1234, protección básica anti-error, no
+          seguridad real). Pesar solo muestra los valores como texto.
+   v7.9.4: peso unitario 4mm corregido a 0.071g/ud (antes 0.0811g,
           erróneo) — verificado con 2 básculas distintas, 7.10-7.11g
           para ~100 uds. Migración automática de localStorage una
           sola vez (migrateP4Weight) para que los dispositivos que ya
@@ -94,7 +115,7 @@
    Fix: JSON parser robusto
    ══════════════════════════════════════════ */
 
-const VERSION = 'v7.9.4';
+const VERSION = 'v7.9.5';
 let lastImageBase64 = null;
 let lastImageMime   = 'image/jpeg';
 let isAnalyzing     = false;
@@ -109,6 +130,7 @@ const UNIT_WEIGHTS  = { p4:0.071, p8:0.3213, p12:0.6969 };
 let multifotos = [];
 let multiTotal  = 0;
 let multiMode   = false;
+let multiManualAdjust = 0;
 
 /* ── estado zonas / wakelock ── */
 let zonesActive = false;
@@ -118,9 +140,9 @@ const qs  = s => document.querySelector(s);
 const qsa = s => document.querySelectorAll(s);
 
 const PELLET_PROFILES = {
-  '4': "Electrodos de disco sinterizado de 4mm de diámetro. Son los discos MÁS PEQUEÑOS de la imagen — significativamente más pequeños que los de 8mm y 12mm. Color rosado o marrón claro cuando son nuevos, se vuelven gris oscuro o marrón oscuro con la exposición a la luz — ambos colores son el mismo producto. Pesan aproximadamente 0.08g cada uno. Tienen un hilo fino metálico saliendo del centro, muy difícil de ver a esta escala. INSTRUCCIONES CRÍTICAS: son extremadamente pequeños y tienden a agruparse. Si ves una zona con varios puntos oscuros juntos, asume que son múltiples discos individuales y cuenta cada punto circular por separado. Cuenta cada disco individualmente aunque se toquen o solapen. Ignora completamente los hilos metálicos — son líneas finas, no discos.",
-  '8': "Electrodos de disco sinterizado de 8mm de diámetro. Son discos de tamaño MEDIANO — más pequeños que los de 12mm pero claramente más grandes que los de 4mm. Color rosado, malva o marrón dependiendo de la exposición a la luz. Pesan aproximadamente 0.32g cada uno. Tienen un hilo fino metálico saliendo del centro. Cuando dos discos se toquen o solapen parcialmente cuenta cada uno como unidad independiente. Si hay solapamiento en zona central agrupa visualmente y estima cuántos discos hay en esa zona. Ignora completamente los hilos metálicos.",
-  '12': "Electrodos de disco sinterizado de 12mm de diámetro. Son los discos MÁS GRANDES de la imagen — notablemente más grandes que los de 8mm. Color rosado, malva o marrón dependiendo de la exposición a la luz — pueden verse claros (rosado/beige) o más oscuros (marrón). Pesan aproximadamente 0.70g cada uno. Tienen un hilo fino metálico de conexión saliendo del centro, a veces doblado o pegado al disco y difícil de ver. Al ser grandes son fáciles de distinguir individualmente. Cuenta cada disco circular grande por separado aunque se toquen en los bordes. Ignora completamente los hilos metálicos."
+  '4': "Electrodos de disco sinterizado de 4mm de diámetro, de aplicación médica — NO son condensadores cerámicos, resistencias ni ningún otro componente electrónico, aunque el disco pequeño con un hilo metálico pueda recordar a uno. Son los discos MÁS PEQUEÑOS de la imagen — significativamente más pequeños que los de 8mm y 12mm. Color rosado o marrón claro cuando son nuevos, se vuelven gris oscuro o marrón oscuro con la exposición a la luz — ambos colores son el mismo producto. Pesan aproximadamente 0.08g cada uno. Tienen un hilo fino metálico saliendo del centro, muy difícil de ver a esta escala. INSTRUCCIONES CRÍTICAS: son extremadamente pequeños y tienden a agruparse. Si ves una zona con varios puntos oscuros juntos, asume que son múltiples discos individuales y cuenta cada punto circular por separado. Cuenta cada disco individualmente aunque se toquen o solapen. Ignora completamente los hilos metálicos — son líneas finas, no discos.",
+  '8': "Electrodos de disco sinterizado de 8mm de diámetro, de aplicación médica — NO son condensadores cerámicos, resistencias ni ningún otro componente electrónico, aunque el disco con un hilo metálico pueda recordar a uno. Son discos de tamaño MEDIANO — más pequeños que los de 12mm pero claramente más grandes que los de 4mm. Color rosado, malva o marrón dependiendo de la exposición a la luz. Pesan aproximadamente 0.32g cada uno. Tienen un hilo fino metálico saliendo del centro. Cuando dos discos se toquen o solapen parcialmente cuenta cada uno como unidad independiente. Si hay solapamiento en zona central agrupa visualmente y estima cuántos discos hay en esa zona. Ignora completamente los hilos metálicos.",
+  '12': "Electrodos de disco sinterizado de 12mm de diámetro, de aplicación médica — NO son condensadores cerámicos, resistencias ni ningún otro componente electrónico, aunque el disco con un hilo metálico pueda recordar a uno. Son los discos MÁS GRANDES de la imagen — notablemente más grandes que los de 8mm. Color rosado, malva o marrón dependiendo de la exposición a la luz — pueden verse claros (rosado/beige) o más oscuros (marrón). Pesan aproximadamente 0.70g cada uno. Tienen un hilo fino metálico de conexión saliendo del centro, a veces doblado o pegado al disco y difícil de ver. Al ser grandes son fáciles de distinguir individualmente. Cuenta cada disco circular grande por separado aunque se toquen en los bordes. Ignora completamente los hilos metálicos."
 };
 
 /* Peso 4mm corregido en v7.9.4 (0.0811g→0.071g, verificado con 2
@@ -304,7 +326,7 @@ function updateMultiSizeTip(){
   el.textContent=MULTI_SIZE_TIPS[size]?`💡 ${size}mm: ${MULTI_SIZE_TIPS[size]}`:'';
 }
 
-function resetMulti() { multifotos=[]; multiTotal=0; renderMultiList(); updateMultiTotal(); }
+function resetMulti() { multifotos=[]; multiTotal=0; multiManualAdjust=0; renderMultiList(); updateMultiTotal(); }
 
 function renderMultiList() {
   const el=qs('#multiList'); if(!el)return;
@@ -318,8 +340,12 @@ function renderMultiList() {
     <div style="display:flex;align-items:center;gap:10px;padding:8px;background:var(--surface2);border-radius:var(--radius);margin-bottom:6px;border:0.5px solid var(--border)">
       <img src="data:${f.mime};base64,${f.base64.slice(0,100)}" style="width:48px;height:48px;object-fit:cover;border-radius:6px;flex-shrink:0;background:var(--surface);border:2px solid ${confBorder}">
       <div style="flex:1">
-        <div style="font-size:14px;font-weight:700;color:${f.result?'var(--text)':'var(--muted)'}">
-          ${f.result?f.result.total+' uds':f.analyzing?'⏳ Analizando…':'⏸ En cola'}
+        <div style="font-size:14px;font-weight:700;color:${f.result?'var(--text)':'var(--muted)'};display:flex;align-items:center;gap:6px">
+          <span>${f.result?f.result.total+' uds':f.analyzing?'⏳ Analizando…':'⏸ En cola'}</span>
+          ${f.result?`
+            <button onclick="adjustMultiFotoCount(${i},-1)" style="width:20px;height:20px;padding:0;font-size:12px;border-radius:6px;justify-content:center">−</button>
+            <button onclick="adjustMultiFotoCount(${i},1)" style="width:20px;height:20px;padding:0;font-size:12px;border-radius:6px;justify-content:center">＋</button>
+          `:''}
         </div>
         <div style="font-size:11px;color:var(--hint)">Foto ${i+1}${f.result?' · Confianza '+f.result.confidence:''}</div>
         ${f.result?.notes?`<div style="font-size:10px;color:var(--hint);font-style:italic">${f.result.notes}</div>`:''}
@@ -332,11 +358,28 @@ function confBorderColor(confidence){
   return {alta:'var(--green)',media:'var(--orange)',baja:'var(--red)'}[confidence]||'var(--border)';
 }
 
+/* Ajuste ±1 por foto individual (antes de confirmar el total) */
+window.adjustMultiFotoCount=function(i,delta){
+  const f=multifotos[i]; if(!f||!f.result)return;
+  f.result.total=Math.max(0,f.result.total+delta);
+  renderMultiList();
+  updateMultiTotal();
+};
+
+/* Ajuste ±1 global sobre el total acumulado, por encima de la suma de fotos */
+window.adjustMultiTotalManual=function(delta){
+  multiManualAdjust+=delta;
+  updateMultiTotal();
+};
+
 function updateMultiTotal() {
-  multiTotal=multifotos.reduce((s,f)=>s+(f.result?.total||0),0);
+  multiTotal=Math.max(0,multifotos.reduce((s,f)=>s+(f.result?.total||0),0)+multiManualAdjust);
   const el=qs('#multiTotal'); if(el)el.textContent=multiTotal;
+  const ready=multifotos.length>0&&multifotos.every(f=>f.result);
   const btn=qs('#btnMultiConfirm');
-  if(btn)btn.style.display=multifotos.length>0&&multifotos.every(f=>f.result)?'flex':'none';
+  if(btn)btn.style.display=ready?'flex':'none';
+  const adjEl=qs('#multiManualAdj');
+  if(adjEl)adjEl.style.display=ready?'flex':'none';
   /* estado de fotos pendientes */
   const pending=multifotos.filter(f=>f.analyzing).length;
   const statusEl=qs('#multiStatus');
@@ -365,6 +408,11 @@ window.addMultiFoto = function(e) {
 async function analyzeOneFoto(entry) {
   const apiKey=getApiKey();
   if(!apiKey){entry.analyzing=false;entry.result={total:0,confidence:'baja',notes:'Sin API key'};renderMultiList();updateMultiTotal();return;}
+  /* v7.9.5: verificado — esto ya lee el mismo #productDesc (con el
+     perfil 4/8/12mm cargado) que runCountAI(), no un texto genérico.
+     El refuerzo real contra la confusión "condensador cerámico" está
+     en PELLET_PROFILES (ver arriba), que ahora dice explícitamente
+     que NO lo son. */
   const productDesc=qs('#productDesc').value.trim()||PELLET_PROFILES['8'];
   const singleSize=qs('#singleSize').value;
   const fewShotCount=getReferenceExamples().filter(e=>e.size===singleSize).slice(-2).length;
@@ -437,18 +485,17 @@ window.confirmMultiTotal = function() {
   const alb=parseInt(qs('#albaranQty').value)||0;
   renderAlbaranStatus(multiTotal,alb);
   qs('#resultsCount').style.display='block';
-  qs('#exportBox').style.display='block';
   qs('#manualAdj').style.display='flex';
   qs('#btnSaveExample').style.display='none';
   qs('#btnZones').style.display='none'; exitZonesView();
   lastConfidence='alta';
-  buildOdoo();
   saveHistoryEntry({
     date:new Date().toLocaleDateString('es-ES')+' '+new Date().toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'}),
     total:multiTotal,aiTotal:multiTotal,size4:counts.c4,size8:counts.c8,size12:counts.c12,
     product:(qs('#productDesc').value||'').slice(0,60),confidence:'alta',
     notes:`Multifoto ${multifotos.length} fotos · ${breakdown}`,
-    albaran:alb||null,odoo:buildOdooText()
+    albaran:alb||null
+    // ODOO - pendiente de implementar: odoo:buildOdooText()
   });
   renderExampleCounts();
   showToast(`Total ${multiTotal} uds ✓`);
@@ -490,7 +537,7 @@ async function runCountAI() {
   qs('#confWarning').style.display='none';
   qs('#overlapWarning').style.display='none';
   qs('#albaranResult').style.display='none';qs('#resultsCount').style.display='none';
-  qs('#exportBox').style.display='none';qs('#manualAdj').style.display='none';qs('#btnSaveExample').style.display='none';
+  qs('#manualAdj').style.display='none';qs('#btnSaveExample').style.display='none';
   qs('#btnZones').style.display='none'; exitZonesView();
 
   const productDesc=qs('#productDesc').value.trim()||PELLET_PROFILES['8'];
@@ -593,13 +640,13 @@ Sustituye los 0 por los conteos reales. confidence: "alta" "media" o "baja". not
     checkOverlapNotice(result.notes);
 
     drawOverlay(total,result.confidence);
-    qs('#resultsCount').style.display='block';qs('#exportBox').style.display='block';qs('#manualAdj').style.display='flex';qs('#btnSaveExample').style.display='flex';qs('#btnZones').style.display='';
-    buildOdoo();
+    qs('#resultsCount').style.display='block';qs('#manualAdj').style.display='flex';qs('#btnSaveExample').style.display='flex';qs('#btnZones').style.display='';
     saveHistoryEntry({
       date:new Date().toLocaleDateString('es-ES')+' '+new Date().toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'}),
       total,aiTotal:total,size4:counts.c4,size8:counts.c8,size12:counts.c12,
       product:(qs('#productDesc').value||'').slice(0,60),
-      confidence:result.confidence,notes:result.notes,albaran:albaranQty||null,odoo:buildOdooText()
+      confidence:result.confidence,notes:result.notes,albaran:albaranQty||null
+      // ODOO - pendiente de implementar: odoo:buildOdooText()
     });
     renderExampleCounts();
     vibrateDone();
@@ -652,7 +699,7 @@ window.adjustCount = function(delta) {
     else if(singleSize==='12'){counts.c12=counts.total;qs('#c12').textContent=counts.total;}
     else{counts.c8=counts.total;qs('#c8').textContent=counts.total;}
   } else {counts.c8=Math.max(0,counts.c8+delta);qs('#c8').textContent=counts.c8;}
-  qs('#cT').textContent=counts.total;buildOdoo();
+  qs('#cT').textContent=counts.total;
   renderAlbaranStatus(counts.total,parseInt(qs('#albaranQty').value)||0);
   if(zonesActive)exitZonesView();
   updateLastHistoryTotal(counts.total,counts.c4,counts.c8,counts.c12);
@@ -892,48 +939,67 @@ function renderHistoryExamples() {
 }
 
 /* ══ EXPORT ODOO ══ */
-function buildOdooText(){
-  const prov=qs('#exProveedor')?.value||'—',po=qs('#exPO')?.value||'—';
-  const pref=qs('#exLote')?.value||'P',ubic=qs('#exUbic')?.value||'WH/Stock';
-  const alb=qs('#albaranQty')?.value||'—';
-  const now=new Date(),seq=Math.floor(Math.random()*900)+100,pad=n=>String(n).padStart(3,'0');
-  const mode=qs('#sizeMode')?.value||'single',sz=qs('#singleSize')?.value||'8';
-  const albNum=parseInt(qs('#albaranQty')?.value)||0,diff=albNum>0?counts.total-albNum:null;
-  const lines=[
-    '=== RECEPCIÓN PELLETS — VERIFICADO IA ===',
-    `Fecha:        ${now.toLocaleDateString('es-ES')}  ${now.toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'})}`,
-    `Proveedor:    ${prov}`,`PO:           ${po}`,`Ubicación:    ${ubic}`,`Albarán:      ${alb} uds`,'---',
-  ];
-  if(mode==='single'){lines.push(`Pellet ${sz}mm   |  Lote: ${pref}-${sz}MM-${pad(seq)}  |  Cant: ${counts.total}`);}
-  else{
-    if(counts.c4>0)lines.push(`Pellet  4mm  |  Lote: ${pref}-4MM-${pad(seq)}    |  Cant: ${counts.c4}`);
-    if(counts.c8>0)lines.push(`Pellet  8mm  |  Lote: ${pref}-8MM-${pad(seq+1)}  |  Cant: ${counts.c8}`);
-    if(counts.c12>0)lines.push(`Pellet 12mm  |  Lote: ${pref}-12MM-${pad(seq+2)} |  Cant: ${counts.c12}`);
-  }
-  lines.push('---',`Total:        ${counts.total} uds`);
-  if(multiMode&&multifotos.length>0)lines.push(`Método:       Multifoto (${multifotos.length} fotos)`);
-  if(diff!==null)lines.push(diff===0?'✓ COINCIDE con albarán':diff<0?`⚠️ FALTAN ${Math.abs(diff)} uds`:`ℹ️ SOBRAN ${diff} uds`);
-  lines.push(`Motor:        Claude Vision AI ${VERSION}`);
-  return lines.join('\n');
-}
-window.buildOdoo=function(){const el=qs('#odooBlock');if(el)el.textContent=buildOdooText();};
-window.copyOdoo=function(){navigator.clipboard.writeText(buildOdooText()).then(()=>showToast('Copiado ✓'));};
+// ODOO - pendiente de implementar (retirado en v7.9.5, código conservado para recuperarlo fácilmente)
+// function buildOdooText(){
+//   const prov=qs('#exProveedor')?.value||'—',po=qs('#exPO')?.value||'—';
+//   const pref=qs('#exLote')?.value||'P',ubic=qs('#exUbic')?.value||'WH/Stock';
+//   const alb=qs('#albaranQty')?.value||'—';
+//   const now=new Date(),seq=Math.floor(Math.random()*900)+100,pad=n=>String(n).padStart(3,'0');
+//   const mode=qs('#sizeMode')?.value||'single',sz=qs('#singleSize')?.value||'8';
+//   const albNum=parseInt(qs('#albaranQty')?.value)||0,diff=albNum>0?counts.total-albNum:null;
+//   const lines=[
+//     '=== RECEPCIÓN PELLETS — VERIFICADO IA ===',
+//     `Fecha:        ${now.toLocaleDateString('es-ES')}  ${now.toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'})}`,
+//     `Proveedor:    ${prov}`,`PO:           ${po}`,`Ubicación:    ${ubic}`,`Albarán:      ${alb} uds`,'---',
+//   ];
+//   if(mode==='single'){lines.push(`Pellet ${sz}mm   |  Lote: ${pref}-${sz}MM-${pad(seq)}  |  Cant: ${counts.total}`);}
+//   else{
+//     if(counts.c4>0)lines.push(`Pellet  4mm  |  Lote: ${pref}-4MM-${pad(seq)}    |  Cant: ${counts.c4}`);
+//     if(counts.c8>0)lines.push(`Pellet  8mm  |  Lote: ${pref}-8MM-${pad(seq+1)}  |  Cant: ${counts.c8}`);
+//     if(counts.c12>0)lines.push(`Pellet 12mm  |  Lote: ${pref}-12MM-${pad(seq+2)} |  Cant: ${counts.c12}`);
+//   }
+//   lines.push('---',`Total:        ${counts.total} uds`);
+//   if(multiMode&&multifotos.length>0)lines.push(`Método:       Multifoto (${multifotos.length} fotos)`);
+//   if(diff!==null)lines.push(diff===0?'✓ COINCIDE con albarán':diff<0?`⚠️ FALTAN ${Math.abs(diff)} uds`:`ℹ️ SOBRAN ${diff} uds`);
+//   lines.push(`Motor:        Claude Vision AI ${VERSION}`);
+//   return lines.join('\n');
+// }
+// window.buildOdoo=function(){const el=qs('#odooBlock');if(el)el.textContent=buildOdooText();};
+// window.copyOdoo=function(){navigator.clipboard.writeText(buildOdooText()).then(()=>showToast('Copiado ✓'));};
 
 /* ══ PESOS UNITARIOS ══
    El módulo gravimétrico clásico (tara manual + peso total) se
    eliminó en v7.9.3 — Pesada rápida lo sustituye por completo.
-   Esto solo carga/guarda los pesos unitarios, compartidos con ella. */
+   v7.9.5: la edición se movió de tab Pesar a Ajustes → "Pesos
+   unitarios", protegida por un PIN simple (no es seguridad real,
+   solo un freno para que un operario no la toque sin querer). Tab
+   Pesar solo muestra los valores actuales como texto informativo
+   (`renderPesosReadOnly`). */
+const PESOS_PIN='1234';
 function initUnitWeights(){
   const w=JSON.parse(localStorage.getItem('unitWeights')||'{}');
   if(qs('#w4'))qs('#w4').value=w.p4||UNIT_WEIGHTS.p4;
   if(qs('#w8'))qs('#w8').value=w.p8||UNIT_WEIGHTS.p8;
   if(qs('#w12'))qs('#w12').value=w.p12||UNIT_WEIGHTS.p12;
+  renderPesosReadOnly();
+}
+function renderPesosReadOnly(){
+  const w=JSON.parse(localStorage.getItem('unitWeights')||'{}');
+  const p4=w.p4||UNIT_WEIGHTS.p4,p8=w.p8||UNIT_WEIGHTS.p8,p12=w.p12||UNIT_WEIGHTS.p12;
+  const line=`4mm: ${p4.toFixed(4)}g/ud · 8mm: ${p8.toFixed(4)}g/ud · 12mm: ${p12.toFixed(4)}g/ud`;
+  const ro=qs('#pesosReadOnly'); if(ro)ro.textContent=line;
+  const info=qs('#pesosInfoLine'); if(info)info.textContent=line;
 }
 window.toggleWeightsCard=function(){
   const el=qs('#pesosCard'),btn=qs('#btnTogglePesos');
   const show=el.style.display==='none';
+  if(show){
+    const pin=prompt('PIN de administrador para editar pesos unitarios:');
+    if(pin===null)return;
+    if(pin!==PESOS_PIN){showToast('PIN incorrecto',true);return;}
+  }
   el.style.display=show?'block':'none';
-  btn.textContent=show?'⚙️ Ocultar pesos':'⚙️ Editar pesos';
+  btn.textContent=show?'🔒 Ocultar pesos':'🔒 Editar pesos (PIN admin)';
 };
 window.saveUnitWeights=function(){
   localStorage.setItem('unitWeights',JSON.stringify({
@@ -941,6 +1007,7 @@ window.saveUnitWeights=function(){
     p8:parseFloat(qs('#w8').value)||UNIT_WEIGHTS.p8,
     p12:parseFloat(qs('#w12').value)||UNIT_WEIGHTS.p12
   }));
+  renderPesosReadOnly();
 };
 
 /* ══ REFERENCIA DEL BOTE (card colapsable, tab Pesar) ══ */
@@ -963,12 +1030,15 @@ function initBoteRef(){
 /* ══ PESADA RÁPIDA ══
    El operario ya hace la tara en la báscula física — la app recibe
    directamente el peso NETO. Sin campo de tara, cálculo en vivo al
-   escribir. Usa los mismos pesos unitarios (#w4/#w8/#w12) que el
-   módulo gravimétrico clásico, así una recalibración vale para ambos. */
+   escribir. Usa los mismos pesos unitarios (#w4/#w8/#w12, protegidos
+   por PIN en Ajustes desde v7.9.5) que el módulo gravimétrico
+   clásico, así una recalibración vale para ambos.
+   v7.9.5: se elimina el autoguardado (debounce + commit-on-change de
+   v7.9.4) — ahora el operario guarda explícitamente con "💾 Guardar
+   pesada" (saveQuickPesada), para tener control total sobre qué
+   pesadas quedan registradas. */
 let quickSize='8';
 let lastQuickResult=null;
-let lastQuickSavedKey=null;
-let quickCommitTimer=null;
 
 /* Verificado con segundo test físico (2 básculas distintas): 4mm ±1/100,
    8mm ±2/200 (≈±1/100), 12mm ±1/94 — las tres tallas rondan ±1 por 100. */
@@ -995,13 +1065,18 @@ function quickUnitWeight(size){
   return parseFloat(qs(map[size])?.value)||UNIT_WEIGHTS['p'+size];
 }
 
-window.calcQuickWeigh=function(commit){
-  clearTimeout(quickCommitTimer);
+function resetSaveButtonState(){
+  const btn=qs('#btnSaveQuick'); if(!btn)return;
+  clearTimeout(btn._t);
+  btn.textContent='💾 Guardar pesada';
+  btn.disabled=false;
+}
+
+window.calcQuickWeigh=function(){
   const net=parseFloat(qs('#quickNetWeight')?.value);
   const resultBox=qs('#quickResultBox');
   if(!net||net<=0){
     resultBox.style.display='none';
-    qs('#quickExportBox').style.display='none';
     qs('#quick4mmTip').style.display='none';
     lastQuickResult=null;
     return;
@@ -1015,97 +1090,62 @@ window.calcQuickWeigh=function(commit){
   qs('#quickPrecisionNote').textContent=QUICK_PRECISION_NOTES[quickSize]||'';
   qs('#quick4mmTip').style.display=quickSize==='4'?'block':'none';
   resultBox.style.display='block';
-  qs('#quickExportBox').style.display='block';
   lastQuickResult={size:quickSize,net,unitW,qty,originalQty:qty};
-  buildQuickOdoo();
-  const doCommit=()=>{
-    const key=`${quickSize}_${net}`;
-    if(key!==lastQuickSavedKey){
-      saveQuickHistoryEntry(lastQuickResult);
-      lastQuickSavedKey=key;
-    }
-  };
-  if(commit) doCommit();
-  /* FIX v7.9.4: el evento "change" de un <input type=number> no siempre
-     dispara en teclados numéricos móviles si el operario no pierde el
-     foco del campo — así que además de guardar al perder foco, se
-     guarda solo también tras 1.2s sin escribir, para que la pesada
-     nunca se quede sin registrar en Historial. */
-  else quickCommitTimer=setTimeout(doCommit,1200);
+  resetSaveButtonState();
 };
 
-/* ══ AJUSTE MANUAL ±1 (Pesada rápida) ══ */
+/* ══ AJUSTE MANUAL ±1 (Pesada rápida) — solo en memoria, hasta que se guarde ══ */
 window.adjustQuickCount=function(delta){
   if(!lastQuickResult)return;
-  clearTimeout(quickCommitTimer);
   lastQuickResult.qty=Math.max(0,lastQuickResult.qty+delta);
-  const {qty,originalQty,size,net,unitW}=lastQuickResult;
-  qs('#quickQty').textContent=qty.toLocaleString('es-ES');
-  buildQuickOdoo();
-  const diff=qty-originalQty;
-  const notes=diff!==0?`Ajustado manualmente ${diff>0?'+':''}${diff}`:null;
-  const key=`${size}_${net}`;
-  const h=loadHistory();
-  if(h.length>0&&h[0].method==='weigh'&&lastQuickSavedKey===key){
-    h[0].total=qty;h[0].size4=size==='4'?qty:0;h[0].size8=size==='8'?qty:0;h[0].size12=size==='12'?qty:0;
-    h[0].notes=notes;h[0].odoo=buildQuickOdooText();
-    localStorage.setItem('analysisHistory',JSON.stringify(h));
-  } else {
-    saveQuickHistoryEntry({size,net,unitW,qty,notes});
-    lastQuickSavedKey=key;
-  }
-  renderWeighCounts();
-  showToast(`Ajustado: ${qty} uds`);
+  qs('#quickQty').textContent=lastQuickResult.qty.toLocaleString('es-ES');
+  resetSaveButtonState();
 };
 
-/* ══ EDICIÓN RÁPIDA DEL PESO 4mm (aviso de variabilidad entre botes) ══ */
-window.toggleInlineW4=function(){
-  const el=qs('#inlineW4Edit'); if(!el)return;
-  const show=el.style.display==='none';
-  el.style.display=show?'block':'none';
-  if(show){
-    const w=JSON.parse(localStorage.getItem('unitWeights')||'{}');
-    qs('#w4Inline').value=w.p4||UNIT_WEIGHTS.p4;
+/* ══ GUARDAR PESADA (explícito) ══ */
+window.saveQuickPesada=function(){
+  if(!lastQuickResult)return;
+  const {size,net,unitW,qty,originalQty}=lastQuickResult;
+  saveQuickHistoryEntry({size,net,unitW,qty,calcTotal:originalQty});
+  showToast('✓ Pesada guardada en historial');
+  const btn=qs('#btnSaveQuick');
+  if(btn){
+    clearTimeout(btn._t);
+    btn.textContent='✓ Guardado';
+    btn.disabled=true;
+    btn._t=setTimeout(()=>{btn.textContent='💾 Guardar pesada';btn.disabled=false;},2000);
   }
 };
-window.saveW4Inline=function(){
-  const val=parseFloat(qs('#w4Inline').value)||UNIT_WEIGHTS.p4;
-  const w=JSON.parse(localStorage.getItem('unitWeights')||'{}');
-  w.p4=val;
-  localStorage.setItem('unitWeights',JSON.stringify(w));
-  if(qs('#w4'))qs('#w4').value=val;
-  calcQuickWeigh();
-  showToast('Peso 4mm actualizado ✓');
-};
 
-function buildQuickOdooText(){
-  if(!lastQuickResult)return '—';
-  const prov=qs('#qExProveedor')?.value||'—',po=qs('#qExPO')?.value||'—';
-  const pref=qs('#qExLote')?.value||'P',ubic=qs('#qExUbic')?.value||'WH/Stock';
-  const now=new Date(),seq=Math.floor(Math.random()*900)+100,pad=n=>String(n).padStart(3,'0');
-  const {size,net,qty}=lastQuickResult;
-  return [
-    '=== RECEPCIÓN PELLETS (PESADA RÁPIDA) ===',
-    `Fecha:        ${now.toLocaleDateString('es-ES')}  ${now.toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'})}`,
-    `Proveedor:    ${prov}`,`PO:           ${po}`,`Ubicación:    ${ubic}`,'---',
-    `Pellet ${size}mm   |  Lote: ${pref}-${size}MM-${pad(seq)}  |  Cant: ${qty.toLocaleString('es-ES')}`,
-    '---',`Peso neto:    ${net.toFixed(3)} g`,`Método:       báscula FC-2000 (peso neto)`,
-  ].join('\n');
-}
-window.buildQuickOdoo=function(){const el=qs('#quickOdooBlock');if(el)el.textContent=buildQuickOdooText();};
-window.copyQuickOdoo=function(){navigator.clipboard.writeText(buildQuickOdooText()).then(()=>showToast('Copiado ✓'));};
-
-function saveQuickHistoryEntry({size,net,unitW,qty,notes}){
+function saveQuickHistoryEntry({size,net,unitW,qty,calcTotal}){
   saveHistoryEntry({
     date:new Date().toLocaleDateString('es-ES')+' '+new Date().toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'}),
     method:'weigh',
-    total:qty,size4:size==='4'?qty:0,size8:size==='8'?qty:0,size12:size==='12'?qty:0,
+    total:qty,calcTotal,size4:size==='4'?qty:0,size8:size==='8'?qty:0,size12:size==='12'?qty:0,
     netWeight:net,unitWeight:unitW,
-    product:'Pesada rápida',notes:notes||null,albaran:null,
-    odoo:buildQuickOdooText()
+    product:'Pesada rápida',notes:null,albaran:null
+    // ODOO - pendiente de implementar: odoo:buildQuickOdooText()
   });
   renderWeighCounts();
 }
+
+// ODOO - pendiente de implementar (retirado en v7.9.5, código conservado para recuperarlo fácilmente)
+// function buildQuickOdooText(){
+//   if(!lastQuickResult)return '—';
+//   const prov=qs('#qExProveedor')?.value||'—',po=qs('#qExPO')?.value||'—';
+//   const pref=qs('#qExLote')?.value||'P',ubic=qs('#qExUbic')?.value||'WH/Stock';
+//   const now=new Date(),seq=Math.floor(Math.random()*900)+100,pad=n=>String(n).padStart(3,'0');
+//   const {size,net,qty}=lastQuickResult;
+//   return [
+//     '=== RECEPCIÓN PELLETS (PESADA RÁPIDA) ===',
+//     `Fecha:        ${now.toLocaleDateString('es-ES')}  ${now.toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'})}`,
+//     `Proveedor:    ${prov}`,`PO:           ${po}`,`Ubicación:    ${ubic}`,'---',
+//     `Pellet ${size}mm   |  Lote: ${pref}-${size}MM-${pad(seq)}  |  Cant: ${qty.toLocaleString('es-ES')}`,
+//     '---',`Peso neto:    ${net.toFixed(3)} g`,`Método:       báscula FC-2000 (peso neto)`,
+//   ].join('\n');
+// }
+// window.buildQuickOdoo=function(){const el=qs('#quickOdooBlock');if(el)el.textContent=buildQuickOdooText();};
+// window.copyQuickOdoo=function(){navigator.clipboard.writeText(buildQuickOdooText()).then(()=>showToast('Copiado ✓'));};
 
 /* ══ VERIFICACIÓN CRUZADA: báscula cuenta → visión confirma ══ */
 window.verifyWithVision=function(){
@@ -1177,9 +1217,13 @@ window.renderHistory=function(){
       ?`<span style="font-size:11px;font-weight:700;color:#fff;background:${sizeBg[sizesUsed[0]]};padding:2px 9px;border-radius:10px">● ${sizesUsed[0]}mm</span>`
       :sizesUsed.map(s=>`<span style="font-size:11px;font-weight:700;color:#fff;background:${sizeBg[s]};padding:2px 9px;border-radius:10px;margin-right:4px">● ${s}mm:${e['size'+s]}</span>`).join('');
     const isWeigh=e.method==='weigh';
-    const wasCorrected=!isWeigh&&e.aiTotal!==undefined&&e.aiTotal!==e.total;
+    const wasCorrected=isWeigh
+      ?e.calcTotal!==undefined&&e.calcTotal!==e.total
+      :e.aiTotal!==undefined&&e.aiTotal!==e.total;
+    const baseVal=isWeigh?e.calcTotal:e.aiTotal;
+    const baseLabel=isWeigh?'⚖️ ':'IA: ';
     const totalDisplay=wasCorrected
-      ?`<span style="font-size:13px;font-weight:700">IA: ${e.aiTotal} → ✏️ ${e.total} (${e.total-e.aiTotal>0?'+':''}${e.total-e.aiTotal} corregido)</span>`
+      ?`<span style="font-size:13px;font-weight:700">${baseLabel}${baseVal} uds (calculado) → ✏️ ${e.total} uds (${e.total-baseVal>0?'+':''}${e.total-baseVal} corregido)</span>`
       :`<span style="font-size:15px;font-weight:700">${isWeigh?'⚖️ ':''}${e.total} uds</span>`;
     const cd=confDisplay[e.confidence];
     const confBadge=isWeigh
@@ -1198,11 +1242,24 @@ window.renderHistory=function(){
         ${sizeBadge}
         ${e.albaran?`<span style="font-size:11px;color:var(--muted)">Albarán:${e.albaran}</span>`:''}
       </div>
-      ${e.odoo?`<button onclick="copyHistEntry(${e._i})" style="font-size:11px;padding:5px 10px">📋 Copiar Odoo</button>`:''}
+      <button onclick="copyHistEntry(${e._i})" style="font-size:11px;padding:5px 10px">📋 Copiar resultado</button>
     </div>`;
   }).join('');
 };
-window.copyHistEntry=function(i){const h=loadHistory();if(h[i]?.odoo)navigator.clipboard.writeText(h[i].odoo).then(()=>showToast('Copiado ✓'));};
+/* v7.9.5: ya no copia formato Odoo, solo un resumen en texto plano,
+   ej. "Pellet 8mm · 55 uds · 23/9/2026 18:22 · Confianza alta". */
+function buildResultSummary(e){
+  const sizesUsed=[e.size4>0?4:null,e.size8>0?8:null,e.size12>0?12:null].filter(Boolean);
+  const sizeLabel=sizesUsed.length===1?`${sizesUsed[0]}mm`:sizesUsed.map(s=>`${s}mm:${e['size'+s]}`).join(' + ');
+  const parts=[`Pellet ${sizeLabel}`,`${e.total} uds`,e.date];
+  if(e.method==='weigh')parts.push('Pesada báscula');
+  else if(e.confidence)parts.push(`Confianza ${e.confidence}`);
+  return parts.join(' · ');
+}
+window.copyHistEntry=function(i){
+  const h=loadHistory();const e=h[i];if(!e)return;
+  navigator.clipboard.writeText(buildResultSummary(e)).then(()=>showToast('Copiado ✓'));
+};
 window.clearHistory=function(){if(!confirm('¿Borrar todo el historial?'))return;localStorage.removeItem('analysisHistory');updateHistoryBadge();renderHistory();renderWeighCounts();};
 
 /* ══ ESTADO DEL ENTRENAMIENTO (dashboard en Ajustes) ══ */

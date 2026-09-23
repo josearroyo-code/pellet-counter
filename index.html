@@ -138,7 +138,7 @@
     <h1>Pellet Counter <span class="ai-badge">✦ Claude AI</span></h1>
     <div style="display:flex;align-items:center;gap:10px">
       <div id="analyzeSpinner" class="spinner"></div>
-      <span class="ver">v7.9.4</span>
+      <span class="ver">v7.9.5</span>
     </div>
   </div>
   <div class="subbar" id="exCounts" style="border-bottom:none;padding-bottom:2px"></div>
@@ -222,8 +222,15 @@
           <div class="m-sub">suma de todas las fotos</div>
         </div>
 
+        <!-- Ajuste manual ±1 sobre el total acumulado -->
+        <div class="manual-adj" id="multiManualAdj">
+          <button class="adj-btn" onclick="adjustMultiTotalManual(-1)" style="background:var(--orange-dim);border-color:var(--orange);color:var(--orange)">−</button>
+          <div class="adj-label">Ajuste manual<br>±1</div>
+          <button class="adj-btn" onclick="adjustMultiTotalManual(+1)" style="background:var(--green-dim);border-color:var(--green);color:var(--green)">＋</button>
+        </div>
+
         <button id="btnMultiConfirm" class="btn-success" onclick="confirmMultiTotal()" style="display:none;width:100%;justify-content:center;padding:12px;font-size:14px">
-          ✓ Confirmar total y exportar a Odoo
+          ✓ Confirmar total
         </button>
       </div>
 
@@ -268,6 +275,7 @@
           ✓ Guardar como ejemplo
         </button>
 
+        <!-- ODOO - pendiente de implementar (retirado en v7.9.5, ver js/app.js)
         <div class="export-box" id="exportBox">
           <p class="section-label">Exportar a Odoo</p>
           <div class="export-fields">
@@ -282,6 +290,7 @@
             <button class="btn-primary" onclick="copyOdoo()">📋 Copiar para Odoo</button>
           </div>
         </div>
+        -->
       </div>
 
       <div class="btn-row" style="margin-top:10px">
@@ -323,16 +332,7 @@
         </div>
       </div>
 
-      <button id="btnTogglePesos" onclick="toggleWeightsCard()" style="width:100%;justify-content:center;margin-bottom:12px">⚙️ Editar pesos</button>
-      <div class="card" id="pesosCard" style="display:none">
-        <p class="card-label">Pesos unitarios (g)</p>
-        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">
-          <div><label style="font-size:10px;color:var(--muted);display:block;margin-bottom:3px;font-weight:700">4mm</label><input type="number" id="w4" value="0.071" step="0.0001" min="0.0001" onchange="saveUnitWeights();calcQuickWeigh()"></div>
-          <div><label style="font-size:10px;color:var(--muted);display:block;margin-bottom:3px;font-weight:700">8mm</label><input type="number" id="w8" value="0.3213" step="0.0001" min="0.0001" onchange="saveUnitWeights();calcQuickWeigh()"></div>
-          <div><label style="font-size:10px;color:var(--muted);display:block;margin-bottom:3px;font-weight:700">12mm</label><input type="number" id="w12" value="0.6969" step="0.0001" min="0.0001" onchange="saveUnitWeights();calcQuickWeigh()"></div>
-        </div>
-        <p style="font-size:11px;color:var(--hint);margin-top:8px">💡 Pesa 10 pellets ÷ 10 para máxima precisión</p>
-      </div>
+      <p style="font-size:12px;color:var(--muted);margin-bottom:12px">⚖️ Pesos unitarios actuales: <span id="pesosInfoLine">—</span><br><span style="font-size:11px;color:var(--hint)">Editables solo por administrador en Ajustes → Pesos unitarios.</span></p>
 
       <!-- ══ PESADA RÁPIDA (principal) ══ -->
       <div class="card">
@@ -346,7 +346,7 @@
         </div>
 
         <p class="quick-step-label">PASO 2 · Peso neto (después de hacer TARA)</p>
-        <input type="number" id="quickNetWeight" placeholder="0.000" step="0.001" min="0" style="font-size:20px;font-weight:700;padding:12px;margin-bottom:14px" oninput="calcQuickWeigh()" onchange="calcQuickWeigh(true)">
+        <input type="number" id="quickNetWeight" placeholder="0.000" step="0.001" min="0" style="font-size:20px;font-weight:700;padding:12px;margin-bottom:14px" oninput="calcQuickWeigh()">
 
         <div id="quickResultBox" style="display:none">
           <p class="quick-step-label">PASO 3 · Resultado</p>
@@ -364,15 +364,10 @@
             <button class="adj-btn" onclick="adjustQuickCount(+1)" style="background:var(--green-dim);border-color:var(--green);color:var(--green)">＋</button>
           </div>
 
+          <button id="btnSaveQuick" class="btn-success" onclick="saveQuickPesada()" style="width:100%;justify-content:center;padding:10px;margin-bottom:10px">💾 Guardar pesada</button>
+
           <div id="quick4mmTip" class="tip" style="display:none">
-            💡 Si el resultado parece incorrecto: pesa 10 pellets de ESTE bote específico y divide entre 10 para verificar el peso unitario — puede variar entre botes.
-            <div style="margin-top:8px">
-              <button id="btnEditW4Inline" onclick="toggleInlineW4()" style="font-size:11px;padding:6px 10px">⚙️ Actualizar peso 4mm</button>
-              <div id="inlineW4Edit" style="display:none;margin-top:8px">
-                <label style="font-size:10px;color:var(--muted);display:block;margin-bottom:3px;font-weight:700">Peso unitario 4mm (g)</label>
-                <input type="number" id="w4Inline" step="0.0001" min="0.0001" onchange="saveW4Inline()">
-              </div>
-            </div>
+            💡 Si el resultado parece incorrecto: pesa 10 pellets de ESTE bote específico y divide entre 10 para verificar el peso unitario — puede variar entre botes. Un administrador puede actualizarlo en Ajustes → Pesos unitarios.
           </div>
 
           <div id="quickPrecisionNote" class="tip" style="margin-bottom:10px"></div>
@@ -380,6 +375,7 @@
         </div>
       </div>
 
+      <!-- ODOO - pendiente de implementar (retirado en v7.9.5, ver js/app.js)
       <div class="export-box" id="quickExportBox">
         <p class="section-label">Exportar a Odoo</p>
         <div class="export-fields">
@@ -392,6 +388,7 @@
         <div class="odoo-block" id="quickOdooBlock">—</div>
         <div class="btn-row"><button class="btn-primary" onclick="copyQuickOdoo()">📋 Copiar a Odoo</button></div>
       </div>
+      -->
 
       <div class="warn">⚠️ Verifica siempre que cada bote contiene un único tamaño antes de pesar — la báscula no detecta mezclas.</div>
     </div>
@@ -429,6 +426,21 @@
         <p id="apiKeyStatus" style="font-size:12px;margin-top:8px;color:var(--muted)"></p>
       </div>
       <div class="card">
+        <p class="card-label">⚖️ Pesos unitarios</p>
+        <p style="font-size:11px;color:var(--hint);margin-bottom:10px;line-height:1.5">Peso individual usado para calcular unidades a partir del peso neto en Pesada rápida (tab Pesar).</p>
+        <div class="warn" style="margin-bottom:10px">⚠️ Solo administrador — cambiar estos valores afecta a todos los cálculos de báscula.</div>
+        <p id="pesosReadOnly" style="font-size:13px;line-height:2;margin-bottom:10px">—</p>
+        <button id="btnTogglePesos" onclick="toggleWeightsCard()" style="width:100%;justify-content:center">🔒 Editar pesos (PIN admin)</button>
+        <div id="pesosCard" style="display:none;margin-top:12px">
+          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">
+            <div><label style="font-size:10px;color:var(--muted);display:block;margin-bottom:3px;font-weight:700">4mm</label><input type="number" id="w4" value="0.071" step="0.0001" min="0.0001" onchange="saveUnitWeights();calcQuickWeigh()"></div>
+            <div><label style="font-size:10px;color:var(--muted);display:block;margin-bottom:3px;font-weight:700">8mm</label><input type="number" id="w8" value="0.3213" step="0.0001" min="0.0001" onchange="saveUnitWeights();calcQuickWeigh()"></div>
+            <div><label style="font-size:10px;color:var(--muted);display:block;margin-bottom:3px;font-weight:700">12mm</label><input type="number" id="w12" value="0.6969" step="0.0001" min="0.0001" onchange="saveUnitWeights();calcQuickWeigh()"></div>
+          </div>
+          <p style="font-size:11px;color:var(--hint);margin-top:8px">💡 Pesa 10 pellets ÷ 10 para máxima precisión</p>
+        </div>
+      </div>
+      <div class="card">
         <p class="card-label">Ejemplos guardados (few-shot)</p>
         <p style="font-size:11px;color:var(--hint);margin-bottom:10px;line-height:1.5">Se usan automáticamente como referencia en el próximo análisis del mismo tamaño (los 2 más recientes).</p>
         <div id="examplesSettings"></div>
@@ -459,14 +471,19 @@
       <div class="card">
         <p class="card-label">Acerca de</p>
         <div style="font-size:12px;color:var(--muted);line-height:2.2">
-          <div><strong style="color:var(--text)">Pellet Counter v7.9.4</strong></div>
+          <div><strong style="color:var(--text)">Pellet Counter v7.9.5</strong></div>
           <div>Motor IA · Claude Sonnet Vision</div>
+          <div>Exportación a Odoo retirada · pendiente de reimplementar</div>
+          <div>Guardado explícito en Pesada rápida · botón "💾 Guardar pesada"</div>
+          <div>Pesos unitarios protegidos · edición solo en Ajustes con PIN admin</div>
+          <div>Ajuste ±1 en multifoto · total acumulado y foto a foto</div>
+          <div>Corrección visible en pesadas · igual que en visión IA</div>
+          <div>Historial · "📋 Copiar resultado" en texto plano, sin Odoo</div>
+          <div>Fix multifoto · usa el mismo perfil de tamaño que foto única</div>
           <div>Peso 4mm corregido · 0.071g/ud, verificado con 2 básculas</div>
           <div>Referencia del bote · card colapsable con peso vacío y procedimiento</div>
-          <div>Ajuste manual ±1 · también en Pesada rápida, con nota en historial</div>
           <div>Fix multifoto · reintento JSON igual que foto única</div>
           <div>Historial con filtro Todos/Visión/Báscula · contador combinado</div>
-          <div>Aviso variabilidad 4mm · edita el peso unitario desde la propia pesada</div>
           <div>⚖️ Pesada rápida · única sección de báscula, sin tara manual</div>
           <div>Precisión verificada · con test físico real (ver Ajustes)</div>
           <div>Verificación cruzada · báscula cuenta → visión confirma</div>
@@ -506,13 +523,13 @@
   <button class="btn-primary" id="installBtn" style="flex-shrink:0">Instalar</button>
 </div>
 
-<!-- splash v7.9.4 -->
+<!-- splash v7.9.5 -->
 <div id="splash" style="position:fixed;inset:0;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:9999;transition:opacity 0.4s">
   <div style="font-size:44px;margin-bottom:14px">⬤</div>
   <div style="font-size:20px;font-weight:700;color:var(--text);letter-spacing:-0.5px">Pellet Counter</div>
   <div style="font-size:12px;color:var(--green);font-weight:600;margin-top:6px;display:flex;align-items:center;gap:8px">
     <span>✦ Claude AI</span><span style="color:var(--hint)">·</span>
-    <span style="font-family:monospace;color:var(--blue)">v7.9.4</span>
+    <span style="font-family:monospace;color:var(--blue)">v7.9.5</span>
   </div>
   <div style="margin-top:28px;width:60px;height:2px;background:var(--surface2);border-radius:2px;overflow:hidden">
     <div style="height:100%;background:linear-gradient(90deg,var(--blue),var(--green));border-radius:2px;animation:load 1.3s ease-out forwards"></div>
