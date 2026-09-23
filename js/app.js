@@ -1,6 +1,33 @@
 /* ══════════════════════════════════════════
-   Pellet Counter v7.9.3 — precisión real + reorganización Pesar
-   NUEVO: mensajes de precisión de Pesada rápida actualizados con
+   Pellet Counter v7.9.4 — fixes urgentes + peso 4mm corregido
+   NUEVO: peso unitario 4mm corregido a 0.071g/ud (antes 0.0811g,
+          erróneo) — verificado con 2 básculas distintas, 7.10-7.11g
+          para ~100 uds. Migración automática de localStorage una
+          sola vez (migrateP4Weight) para que los dispositivos que ya
+          tenían el valor viejo guardado se autocorrijan.
+   NUEVO: card "📦 Referencia del bote" en tab Pesar (colapsable,
+          expandida por defecto, estado guardado en localStorage) con
+          peso de bote vacío, avisos de báscula y procedimiento en
+          5 pasos.
+   NUEVO: mensajes de precisión de Pesada rápida y tabla de Ajustes
+          actualizados con el segundo test físico (4mm ±1/100, 8mm
+          ±2/200, 12mm ±1/94, verificado con 2 básculas).
+   FIX CRÍTICO: analyzeOneFoto() (modo multifoto) ahora tiene el mismo
+          reintento con prompt ultra-simple que runCountAI ya tenía
+          para foto única — antes fallaba con error JSON sin reintentar.
+   NUEVO: ajuste manual ±1 también en Pesada rápida, con nota
+          "Ajustado manualmente ±N" guardada en Historial.
+   FIX: Pesada rápida no siempre guardaba en Historial si el usuario
+          no perdía el foco del campo de peso neto (el evento "change"
+          es poco fiable en teclados numéricos móviles) — ahora también
+          se guarda automáticamente 1.2s después de dejar de escribir.
+   NUEVO: filtro de Historial con 3 botones (Todos/Visión/Báscula) en
+          vez de toggle, más un contador combinado "📷 N análisis ·
+          ⚖️ N pesadas".
+   NUEVO: aviso de variabilidad de peso entre botes en 4mm, con acceso
+          directo para actualizar el peso unitario desde la propia
+          Pesada rápida sin ir a la card de pesos.
+   v7.9.3: mensajes de precisión de Pesada rápida actualizados con
           test físico real (4mm ±1-2/20, 8mm ±2/200, 12mm ±0/94) —
           eliminado el aviso de "precisión limitada" en 4mm, los
           datos reales lo desmienten.
@@ -67,13 +94,16 @@
    Fix: JSON parser robusto
    ══════════════════════════════════════════ */
 
-const VERSION = 'v7.9.3';
+const VERSION = 'v7.9.4';
 let lastImageBase64 = null;
 let lastImageMime   = 'image/jpeg';
 let isAnalyzing     = false;
 let counts          = { c4:0, c8:0, c12:0, total:0 };
 let lastConfidence  = null;
-const UNIT_WEIGHTS  = { p4:0.0811, p8:0.3213, p12:0.6969 };
+/* 4mm corregido en v7.9.4: 0.071g/ud verificado con 2 básculas (antes
+   0.0811g, erróneo). Ver migrateP4Weight() para la migración one-shot
+   de localStorage. */
+const UNIT_WEIGHTS  = { p4:0.071, p8:0.3213, p12:0.6969 };
 
 /* ── estado multifoto ── */
 let multifotos = [];
@@ -93,10 +123,24 @@ const PELLET_PROFILES = {
   '12': "Electrodos de disco sinterizado de 12mm de diámetro. Son los discos MÁS GRANDES de la imagen — notablemente más grandes que los de 8mm. Color rosado, malva o marrón dependiendo de la exposición a la luz — pueden verse claros (rosado/beige) o más oscuros (marrón). Pesan aproximadamente 0.70g cada uno. Tienen un hilo fino metálico de conexión saliendo del centro, a veces doblado o pegado al disco y difícil de ver. Al ser grandes son fáciles de distinguir individualmente. Cuenta cada disco circular grande por separado aunque se toquen en los bordes. Ignora completamente los hilos metálicos."
 };
 
+/* Peso 4mm corregido en v7.9.4 (0.0811g→0.071g, verificado con 2
+   básculas). Se ejecuta una sola vez por dispositivo: si ya había un
+   valor guardado en localStorage (viejo o no), se fuerza al nuevo
+   default una única vez, para no pisar una edición manual posterior. */
+function migrateP4Weight() {
+  if (localStorage.getItem('p4WeightFixedV794')) return;
+  const w = JSON.parse(localStorage.getItem('unitWeights') || '{}');
+  w.p4 = UNIT_WEIGHTS.p4;
+  localStorage.setItem('unitWeights', JSON.stringify(w));
+  localStorage.setItem('p4WeightFixedV794', '1');
+}
+
 /* ══ INIT ══ */
 document.addEventListener('DOMContentLoaded', () => {
+  migrateP4Weight();
   restoreSettings(); initUnitWeights(); loadHistory(); updateHistoryBadge();
   renderProductSelector(); renderExampleCounts(); updateFewshotNotice(); renderWeighCounts();
+  initBoteRef();
   selectQuickSize(quickSize);
   const ap = localStorage.getItem('activeProfile');
   if (ap) setTimeout(() => highlightProfile(ap), 100);
@@ -340,20 +384,38 @@ REGLAS: ignora hilos, fondo, sombras. Si se tocan cuenta cada uno individualment
 RESPONDE EXCLUSIVAMENTE CON ESTE JSON, CERO texto adicional:
 {"small":0,"medium":0,"large":0,"total":0,"confidence":"alta","notes":null}`;
 
-  try {
-    const fewShot=buildFewShotBlocks(singleSize);
+  /* FIX CRÍTICO v7.9.4: mismo reintento con prompt ultra-simple que
+     runCountAI ya tenía para foto única — antes analyzeOneFoto solo
+     intentaba un regex de rescate y, si fallaba, daba error directo
+     sin reintentar con una segunda llamada a la API. */
+  async function askClaude(promptText, includeFewShot) {
+    const fewShot=includeFewShot?buildFewShotBlocks(singleSize):[];
     const res=await fetch('https://api.anthropic.com/v1/messages',{
       method:'POST',
       headers:{'Content-Type':'application/json','x-api-key':apiKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
       body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:200,messages:[{role:'user',content:[
         ...fewShot,
         {type:'image',source:{type:'base64',media_type:entry.mime,data:entry.base64}},
-        {type:'text',text:prompt}
+        {type:'text',text:promptText}
       ]}]})
     });
+    if(!res.ok){const err=await res.json();throw new Error(err.error?.message||`HTTP ${res.status}`);}
     const data=await res.json();
-    let text=data.content[0].text.trim().replace(/```json|```/g,'').trim();
-    if(!text.startsWith('{')){const m=text.match(/\{[\s\S]*?"total"[\s\S]*?\}/);if(m)text=m[0];}
+    return data.content[0].text.trim().replace(/```json|```/g,'').trim();
+  }
+  function extractJson(text){
+    if(text.startsWith('{'))return text;
+    const m=text.match(/\{[\s\S]*?\}/);
+    return m?m[0]:null;
+  }
+
+  try {
+    let text=extractJson(await askClaude(prompt,true));
+    if(!text){
+      const simplePrompt=`Cuenta los objetos circulares visibles en la imagen.\nResponde SOLO con este JSON sin ningún texto adicional:\n{"small":0,"medium":0,"large":0,"total":0,"confidence":"media","notes":null}\nSustituye los 0 de "medium" y "total" por el número real que cuentes (deben ser iguales).`;
+      text=extractJson(await askClaude(simplePrompt,false));
+      if(!text)throw new Error('La IA no devolvió JSON tras reintentar. Pulsa la foto de nuevo o elimínala y repite.');
+    }
     const r=JSON.parse(text);
     entry.result={total:r.total||r.medium||0,confidence:r.confidence||'media',notes:r.notes};
   } catch(err) {
@@ -881,6 +943,23 @@ window.saveUnitWeights=function(){
   }));
 };
 
+/* ══ REFERENCIA DEL BOTE (card colapsable, tab Pesar) ══ */
+window.toggleBoteRef=function(){
+  const body=qs('#boteRefBody'),btn=qs('#btnToggleBoteRef');
+  if(!body||!btn)return;
+  const collapsed=body.style.display!=='none';
+  body.style.display=collapsed?'none':'block';
+  btn.textContent=collapsed?'▶ Mostrar referencia':'▼ Ocultar referencia';
+  localStorage.setItem('boteRefCollapsed',collapsed?'1':'0');
+};
+function initBoteRef(){
+  const body=qs('#boteRefBody'),btn=qs('#btnToggleBoteRef');
+  if(!body||!btn)return;
+  const collapsed=localStorage.getItem('boteRefCollapsed')==='1';
+  body.style.display=collapsed?'none':'block';
+  btn.textContent=collapsed?'▶ Mostrar referencia':'▼ Ocultar referencia';
+}
+
 /* ══ PESADA RÁPIDA ══
    El operario ya hace la tara en la báscula física — la app recibe
    directamente el peso NETO. Sin campo de tara, cálculo en vivo al
@@ -889,15 +968,15 @@ window.saveUnitWeights=function(){
 let quickSize='8';
 let lastQuickResult=null;
 let lastQuickSavedKey=null;
+let quickCommitTimer=null;
 
-const QUICK_ERROR_PER_100={'4':12,'8':3,'12':1};
-/* Verificado con test físico real el 22/09/2026: 4mm 20 calc vs 19 real (±1),
-   8mm 202 vs 200 (±2), 12mm 94 vs 94 (±0). La báscula funciona bien en los
-   tres tamaños — el aviso de "precisión limitada" en 4mm quedó desmentido. */
+/* Verificado con segundo test físico (2 básculas distintas): 4mm ±1/100,
+   8mm ±2/200 (≈±1/100), 12mm ±1/94 — las tres tallas rondan ±1 por 100. */
+const QUICK_ERROR_PER_100={'4':1,'8':1,'12':1};
 const QUICK_PRECISION_NOTES={
-  '4': '✅ Precisión real verificada: ±1-2 uds en 20 uds (test real)',
-  '8': '✅ Precisión real verificada: ±2 uds en 200 uds (test real)',
-  '12':'✅ Precisión real verificada: ±0 uds en 94 uds (test real)'
+  '4': '✅ Error máximo ±1 ud en 100 uds (verificado con 2 básculas)',
+  '8': '✅ Error máximo ±2 uds en 200 uds (verificado)',
+  '12':'✅ Error máximo ±1 ud en 94 uds (verificado)'
 };
 
 window.selectQuickSize=function(size){
@@ -917,11 +996,13 @@ function quickUnitWeight(size){
 }
 
 window.calcQuickWeigh=function(commit){
+  clearTimeout(quickCommitTimer);
   const net=parseFloat(qs('#quickNetWeight')?.value);
   const resultBox=qs('#quickResultBox');
   if(!net||net<=0){
     resultBox.style.display='none';
     qs('#quickExportBox').style.display='none';
+    qs('#quick4mmTip').style.display='none';
     lastQuickResult=null;
     return;
   }
@@ -932,17 +1013,69 @@ window.calcQuickWeigh=function(commit){
   qs('#quickErrorLine').textContent=`±${errEstimate} ud${errEstimate>1?'s':''} (FC-2000)`;
   qs('#quickMeta').textContent=`${net.toFixed(3)} g ÷ ${unitW.toFixed(4)} g/ud`;
   qs('#quickPrecisionNote').textContent=QUICK_PRECISION_NOTES[quickSize]||'';
+  qs('#quick4mmTip').style.display=quickSize==='4'?'block':'none';
   resultBox.style.display='block';
   qs('#quickExportBox').style.display='block';
-  lastQuickResult={size:quickSize,net,unitW,qty};
+  lastQuickResult={size:quickSize,net,unitW,qty,originalQty:qty};
   buildQuickOdoo();
-  if(commit){
+  const doCommit=()=>{
     const key=`${quickSize}_${net}`;
     if(key!==lastQuickSavedKey){
       saveQuickHistoryEntry(lastQuickResult);
       lastQuickSavedKey=key;
     }
+  };
+  if(commit) doCommit();
+  /* FIX v7.9.4: el evento "change" de un <input type=number> no siempre
+     dispara en teclados numéricos móviles si el operario no pierde el
+     foco del campo — así que además de guardar al perder foco, se
+     guarda solo también tras 1.2s sin escribir, para que la pesada
+     nunca se quede sin registrar en Historial. */
+  else quickCommitTimer=setTimeout(doCommit,1200);
+};
+
+/* ══ AJUSTE MANUAL ±1 (Pesada rápida) ══ */
+window.adjustQuickCount=function(delta){
+  if(!lastQuickResult)return;
+  clearTimeout(quickCommitTimer);
+  lastQuickResult.qty=Math.max(0,lastQuickResult.qty+delta);
+  const {qty,originalQty,size,net,unitW}=lastQuickResult;
+  qs('#quickQty').textContent=qty.toLocaleString('es-ES');
+  buildQuickOdoo();
+  const diff=qty-originalQty;
+  const notes=diff!==0?`Ajustado manualmente ${diff>0?'+':''}${diff}`:null;
+  const key=`${size}_${net}`;
+  const h=loadHistory();
+  if(h.length>0&&h[0].method==='weigh'&&lastQuickSavedKey===key){
+    h[0].total=qty;h[0].size4=size==='4'?qty:0;h[0].size8=size==='8'?qty:0;h[0].size12=size==='12'?qty:0;
+    h[0].notes=notes;h[0].odoo=buildQuickOdooText();
+    localStorage.setItem('analysisHistory',JSON.stringify(h));
+  } else {
+    saveQuickHistoryEntry({size,net,unitW,qty,notes});
+    lastQuickSavedKey=key;
   }
+  renderWeighCounts();
+  showToast(`Ajustado: ${qty} uds`);
+};
+
+/* ══ EDICIÓN RÁPIDA DEL PESO 4mm (aviso de variabilidad entre botes) ══ */
+window.toggleInlineW4=function(){
+  const el=qs('#inlineW4Edit'); if(!el)return;
+  const show=el.style.display==='none';
+  el.style.display=show?'block':'none';
+  if(show){
+    const w=JSON.parse(localStorage.getItem('unitWeights')||'{}');
+    qs('#w4Inline').value=w.p4||UNIT_WEIGHTS.p4;
+  }
+};
+window.saveW4Inline=function(){
+  const val=parseFloat(qs('#w4Inline').value)||UNIT_WEIGHTS.p4;
+  const w=JSON.parse(localStorage.getItem('unitWeights')||'{}');
+  w.p4=val;
+  localStorage.setItem('unitWeights',JSON.stringify(w));
+  if(qs('#w4'))qs('#w4').value=val;
+  calcQuickWeigh();
+  showToast('Peso 4mm actualizado ✓');
 };
 
 function buildQuickOdooText(){
@@ -962,13 +1095,13 @@ function buildQuickOdooText(){
 window.buildQuickOdoo=function(){const el=qs('#quickOdooBlock');if(el)el.textContent=buildQuickOdooText();};
 window.copyQuickOdoo=function(){navigator.clipboard.writeText(buildQuickOdooText()).then(()=>showToast('Copiado ✓'));};
 
-function saveQuickHistoryEntry({size,net,unitW,qty}){
+function saveQuickHistoryEntry({size,net,unitW,qty,notes}){
   saveHistoryEntry({
     date:new Date().toLocaleDateString('es-ES')+' '+new Date().toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'}),
     method:'weigh',
     total:qty,size4:size==='4'?qty:0,size8:size==='8'?qty:0,size12:size==='12'?qty:0,
     netWeight:net,unitWeight:unitW,
-    product:'Pesada rápida',notes:null,albaran:null,
+    product:'Pesada rápida',notes:notes||null,albaran:null,
     odoo:buildQuickOdooText()
   });
   renderWeighCounts();
@@ -1006,12 +1139,13 @@ function updateLastHistoryTotal(newTotal,size4,size8,size12){
 }
 function updateHistoryBadge(){const h=loadHistory(),b=qs('#historyBadge');if(b)b.textContent=h.length>0?h.length:'';}
 
-/* ══ FILTRO HISTORIAL: Visión IA / Báscula ══
-   Por defecto ('all') se muestran ambos tipos juntos. Pulsar un
-   sub-tab filtra a ese tipo; pulsarlo de nuevo vuelve a 'all'. */
+/* ══ FILTRO HISTORIAL: Todos / Visión IA / Báscula ══
+   v7.9.4: 3 botones tipo radio en vez de toggle (antes solo había
+   Visión/Báscula y pulsar de nuevo volvía a 'all', sin un botón
+   "Todos" explícito). */
 let historyFilter='all';
 window.filterHistory=function(type){
-  historyFilter=(historyFilter===type)?'all':type;
+  historyFilter=type;
   qsa('.hist-subtab').forEach(b=>b.classList.toggle('active',b.dataset.histsub===historyFilter));
   renderHistory();
 };
@@ -1022,9 +1156,8 @@ window.renderHistory=function(){
   let h=loadHistory().map((e,i)=>({...e,_i:i}));
   const visionCount=h.filter(e=>e.method!=='weigh').length;
   const weighCount=h.filter(e=>e.method==='weigh').length;
-  const tv=qs('#histTabVision'),tw=qs('#histTabWeigh');
-  if(tv)tv.textContent=`📷 Visión IA · ${visionCount}`;
-  if(tw)tw.textContent=`⚖️ Báscula · ${weighCount}`;
+  const hc=qs('#histCounts');
+  if(hc)hc.textContent=`📷 ${visionCount} análisis · ⚖️ ${weighCount} pesadas`;
   if(historyFilter==='vision')h=h.filter(e=>e.method!=='weigh');
   else if(historyFilter==='weigh')h=h.filter(e=>e.method==='weigh');
   if(h.length===0){el.innerHTML='<p style="color:var(--muted);font-size:13px;text-align:center;padding:24px">Sin análisis aún</p>';return;}
@@ -1050,7 +1183,7 @@ window.renderHistory=function(){
       :`<span style="font-size:15px;font-weight:700">${isWeigh?'⚖️ ':''}${e.total} uds</span>`;
     const cd=confDisplay[e.confidence];
     const confBadge=isWeigh
-      ?`<span style="font-size:11px;color:var(--muted);flex-shrink:0;font-family:'SF Mono','Fira Code',monospace">${e.netWeight?.toFixed(3)}g÷${e.unitWeight?.toFixed(4)}g</span>`
+      ?`<span style="font-size:11px;color:var(--muted);flex-shrink:0;font-family:'SF Mono','Fira Code',monospace">${e.netWeight?.toFixed(3)}g ÷ ${e.unitWeight?.toFixed(3)}g/ud</span>`
       :cd
       ?`<span style="font-size:12px;font-weight:700;color:${cd.color};display:inline-flex;align-items:center;gap:3px;flex-shrink:0">${cd.icon} ${cd.label}</span>`
       :`<span style="font-size:12px;color:var(--muted);flex-shrink:0">—</span>`;
