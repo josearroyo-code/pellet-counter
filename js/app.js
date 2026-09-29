@@ -1,9 +1,43 @@
 /* ══════════════════════════════════════════
-   Pellet Counter v7.9.5 — sin Odoo, guardado explícito, pesos protegidos
-   FIX: analyzeOneFoto() (multifoto) ya usaba el mismo productDesc que
+   Pellet Counter v7.9.6 — fixes de multifoto con datos reales
+   FIX CRÍTICO: el refuerzo de PELLET_PROFILES de v7.9.5 no bastó —
+          Claude seguía diciendo "condensadores cerámicos" en
+          multifoto en pruebas reales. analyzeOneFoto() ya no vuelve
+          a leer #productDesc en cada foto: usa un snapshot congelado
+          en window._currentProductDesc, asignado una sola vez por
+          lote en addMultiFoto() antes de programar ningún análisis,
+          para eliminar cualquier posibilidad de lectura tardía del
+          DOM mientras el lote se resuelve de forma asíncrona.
+   FIX: miniaturas de multifoto en negro — el bug real era
+          `f.base64.slice(0,100)` en el src de la imagen, que
+          truncaba el base64 a un data-URI inválido. Ahora usa
+          `URL.createObjectURL(file)` (blobUrl), revocada al borrar
+          la foto o al reiniciar el lote.
+   NUEVO: corrección de foto con rango amplio — junto a cada
+          miniatura, campo numérico editable directamente (más los
+          ±1 ya existentes para ajustes finos).
+   NUEVO: corrección del total con rango amplio — el total acumulado
+          de multifoto es ahora un campo numérico editable
+          directamente (recalcula multiManualAdjust para que el ±1
+          siga funcionando después).
+   NUEVO: confianza de multifoto pasa a "media" si el total
+          confirmado difiere de la suma de lo que Claude reportó
+          originalmente por foto (antes de cualquier corrección
+          manual, por foto o global) — igual que ya ocurre en visión
+          de foto única.
+   NUEVO: toast "✓ Total confirmado: N uds de Xmm" + scroll automático
+          a los resultados al confirmar el total de multifoto.
+   NUEVO: texto instructivo fijo encima de la lista de fotos en
+          multifoto.
+   NUEVO: desglose por foto en Historial para entradas de multifoto
+          ("📷 Foto 1: N uds"), más visible que el antiguo "F1:N F2:N"
+          comprimido en el campo notes — vía el nuevo campo
+          `photoBreakdown`.
+   v7.9.5: analyzeOneFoto() (multifoto) ya usaba el mismo productDesc que
           runCountAI (verificado) — se refuerza PELLET_PROFILES para
           que Claude no confunda los pellets con condensadores
           cerámicos (visualmente similares: disco pequeño + hilo).
+          (Insuficiente — ver el FIX CRÍTICO de v7.9.6 arriba.)
    RETIRADO: toda la exportación a Odoo (Contar, Pesar, Historial) —
           código comentado con "// ODOO - pendiente de implementar"
           en vez de borrado, para poder recuperarlo fácilmente.
@@ -115,7 +149,7 @@
    Fix: JSON parser robusto
    ══════════════════════════════════════════ */
 
-const VERSION = 'v7.9.5';
+const VERSION = 'v7.9.6';
 let lastImageBase64 = null;
 let lastImageMime   = 'image/jpeg';
 let isAnalyzing     = false;
@@ -326,7 +360,12 @@ function updateMultiSizeTip(){
   el.textContent=MULTI_SIZE_TIPS[size]?`💡 ${size}mm: ${MULTI_SIZE_TIPS[size]}`:'';
 }
 
-function resetMulti() { multifotos=[]; multiTotal=0; multiManualAdjust=0; renderMultiList(); updateMultiTotal(); }
+/* v7.9.6: revoca las blob URLs de las miniaturas antes de descartarlas,
+   para no acumular memoria en una sesión larga de la PWA. */
+function resetMulti() {
+  multifotos.forEach(f=>{if(f.blobUrl)URL.revokeObjectURL(f.blobUrl);});
+  multifotos=[]; multiTotal=0; multiManualAdjust=0; renderMultiList(); updateMultiTotal();
+}
 
 function renderMultiList() {
   const el=qs('#multiList'); if(!el)return;
@@ -338,16 +377,17 @@ function renderMultiList() {
     const confBorder=confBorderColor(f.result?.confidence);
     return `
     <div style="display:flex;align-items:center;gap:10px;padding:8px;background:var(--surface2);border-radius:var(--radius);margin-bottom:6px;border:0.5px solid var(--border)">
-      <img src="data:${f.mime};base64,${f.base64.slice(0,100)}" style="width:48px;height:48px;object-fit:cover;border-radius:6px;flex-shrink:0;background:var(--surface);border:2px solid ${confBorder}">
+      <img src="${f.blobUrl}" style="width:48px;height:48px;object-fit:cover;border-radius:6px;flex-shrink:0;background:var(--surface);border:2px solid ${confBorder}">
       <div style="flex:1">
-        <div style="font-size:14px;font-weight:700;color:${f.result?'var(--text)':'var(--muted)'};display:flex;align-items:center;gap:6px">
-          <span>${f.result?f.result.total+' uds':f.analyzing?'⏳ Analizando…':'⏸ En cola'}</span>
+        <div style="display:flex;align-items:center;gap:6px">
           ${f.result?`
-            <button onclick="adjustMultiFotoCount(${i},-1)" style="width:20px;height:20px;padding:0;font-size:12px;border-radius:6px;justify-content:center">−</button>
-            <button onclick="adjustMultiFotoCount(${i},1)" style="width:20px;height:20px;padding:0;font-size:12px;border-radius:6px;justify-content:center">＋</button>
-          `:''}
+            <button onclick="adjustMultiFotoCount(${i},-1)" style="width:24px;height:24px;padding:0;font-size:13px;border-radius:6px;justify-content:center;flex-shrink:0">−</button>
+            <input type="number" value="${f.result.total}" onchange="setMultiFotoCount(${i},this.value)" style="width:56px;text-align:center;padding:4px 2px;font-size:14px;font-weight:700;flex-shrink:0">
+            <button onclick="adjustMultiFotoCount(${i},1)" style="width:24px;height:24px;padding:0;font-size:13px;border-radius:6px;justify-content:center;flex-shrink:0">＋</button>
+            <span style="font-size:11px;color:var(--muted)">uds</span>
+          `:`<span style="font-size:14px;font-weight:700;color:var(--muted)">${f.analyzing?'⏳ Analizando…':'⏸ En cola'}</span>`}
         </div>
-        <div style="font-size:11px;color:var(--hint)">Foto ${i+1}${f.result?' · Confianza '+f.result.confidence:''}</div>
+        <div style="font-size:11px;color:var(--hint);margin-top:2px">Foto ${i+1}${f.result?' · Confianza '+f.result.confidence:''}</div>
         ${f.result?.notes?`<div style="font-size:10px;color:var(--hint);font-style:italic">${f.result.notes}</div>`:''}
       </div>
       <button onclick="removeMultiFoto(${i})" style="padding:4px 8px;font-size:11px;color:var(--orange);border-color:var(--orange);flex-shrink:0">✕</button>
@@ -366,15 +406,35 @@ window.adjustMultiFotoCount=function(i,delta){
   updateMultiTotal();
 };
 
+/* v7.9.6: edición directa del total de una foto (correcciones grandes,
+   ej. 62→49, serían 13 pulsaciones de ±1). onchange (no oninput) para
+   no perder el foco del campo al re-renderizar la lista en cada tecla. */
+window.setMultiFotoCount=function(i,value){
+  const f=multifotos[i]; if(!f||!f.result)return;
+  f.result.total=Math.max(0,parseInt(value)||0);
+  renderMultiList();
+  updateMultiTotal();
+};
+
 /* Ajuste ±1 global sobre el total acumulado, por encima de la suma de fotos */
 window.adjustMultiTotalManual=function(delta){
   multiManualAdjust+=delta;
   updateMultiTotal();
 };
 
+/* v7.9.6: edición directa del total acumulado. Recalcula multiManualAdjust
+   para que sum(fotos)+multiManualAdjust siga dando el valor escrito, así
+   el ±1 posterior sigue funcionando de forma incremental desde ahí. */
+window.setMultiTotalManual=function(value){
+  const sum=multifotos.reduce((s,f)=>s+(f.result?.total||0),0);
+  const n=Math.max(0,parseInt(value)||0);
+  multiManualAdjust=n-sum;
+  updateMultiTotal();
+};
+
 function updateMultiTotal() {
   multiTotal=Math.max(0,multifotos.reduce((s,f)=>s+(f.result?.total||0),0)+multiManualAdjust);
-  const el=qs('#multiTotal'); if(el)el.textContent=multiTotal;
+  const el=qs('#multiTotal'); if(el)el.value=multiTotal;
   const ready=multifotos.length>0&&multifotos.every(f=>f.result);
   const btn=qs('#btnMultiConfirm');
   if(btn)btn.style.display=ready?'flex':'none';
@@ -390,13 +450,23 @@ function updateMultiTotal() {
   }
 }
 
-window.removeMultiFoto = function(i) { multifotos.splice(i,1); renderMultiList(); updateMultiTotal(); };
+window.removeMultiFoto = function(i) {
+  const f=multifotos[i];
+  if(f?.blobUrl)URL.revokeObjectURL(f.blobUrl);
+  multifotos.splice(i,1); renderMultiList(); updateMultiTotal();
+};
 
 window.addMultiFoto = function(e) {
+  /* v7.9.6 FIX: se congela la descripción de producto UNA vez por lote,
+     antes de programar ningún analyzeOneFoto — evita cualquier lectura
+     tardía de #productDesc si el DOM cambiase mientras las fotos de
+     este lote siguen resolviéndose de forma asíncrona. */
+  window._currentProductDesc=qs('#productDesc').value.trim()||PELLET_PROFILES['8'];
   Array.from(e.target.files).forEach(f => {
+    const blobUrl=URL.createObjectURL(f);
     const reader=new FileReader();
     reader.onload=ev=>{
-      const entry={base64:ev.target.result.split(',')[1],mime:f.type||'image/jpeg',result:null,analyzing:true};
+      const entry={base64:ev.target.result.split(',')[1],mime:f.type||'image/jpeg',blobUrl,result:null,analyzing:true};
       multifotos.push(entry); renderMultiList(); updateMultiTotal();
       analyzeOneFoto(entry);
     };
@@ -407,13 +477,17 @@ window.addMultiFoto = function(e) {
 
 async function analyzeOneFoto(entry) {
   const apiKey=getApiKey();
-  if(!apiKey){entry.analyzing=false;entry.result={total:0,confidence:'baja',notes:'Sin API key'};renderMultiList();updateMultiTotal();return;}
-  /* v7.9.5: verificado — esto ya lee el mismo #productDesc (con el
-     perfil 4/8/12mm cargado) que runCountAI(), no un texto genérico.
-     El refuerzo real contra la confusión "condensador cerámico" está
-     en PELLET_PROFILES (ver arriba), que ahora dice explícitamente
-     que NO lo son. */
-  const productDesc=qs('#productDesc').value.trim()||PELLET_PROFILES['8'];
+  if(!apiKey){entry.analyzing=false;entry.result={total:0,aiTotal:0,confidence:'baja',notes:'Sin API key'};renderMultiList();updateMultiTotal();return;}
+  /* v7.9.5: verificado — esto ya leía el mismo #productDesc (con el
+     perfil 4/8/12mm cargado) que runCountAI(), no un texto genérico;
+     el refuerzo en PELLET_PROFILES contra "condensador cerámico" no
+     bastó (el usuario lo siguió viendo en pruebas reales). v7.9.6:
+     en vez de volver a leer el DOM aquí (que podría no reflejar el
+     perfil activo si cambia mientras este lote sigue resolviéndose
+     de forma asíncrona), se usa el snapshot congelado por
+     addMultiFoto() en window._currentProductDesc, idéntico para
+     todas las fotos de un mismo lote. */
+  const productDesc=window._currentProductDesc||qs('#productDesc').value.trim()||PELLET_PROFILES['8'];
   const singleSize=qs('#singleSize').value;
   const fewShotCount=getReferenceExamples().filter(e=>e.size===singleSize).slice(-2).length;
   const fewShotNote=fewShotCount>0
@@ -465,9 +539,10 @@ RESPONDE EXCLUSIVAMENTE CON ESTE JSON, CERO texto adicional:
       if(!text)throw new Error('La IA no devolvió JSON tras reintentar. Pulsa la foto de nuevo o elimínala y repite.');
     }
     const r=JSON.parse(text);
-    entry.result={total:r.total||r.medium||0,confidence:r.confidence||'media',notes:r.notes};
+    const total=r.total||r.medium||0;
+    entry.result={total,aiTotal:total,confidence:r.confidence||'media',notes:r.notes};
   } catch(err) {
-    entry.result={total:0,confidence:'baja',notes:'Error: '+err.message};
+    entry.result={total:0,aiTotal:0,confidence:'baja',notes:'Error: '+err.message};
   } finally {
     entry.analyzing=false; renderMultiList(); updateMultiTotal();
   }
@@ -475,31 +550,41 @@ RESPONDE EXCLUSIVAMENTE CON ESTE JSON, CERO texto adicional:
 
 window.confirmMultiTotal = function() {
   const singleSize=qs('#singleSize').value;
+  /* v7.9.6: confianza "alta" solo si el total confirmado coincide
+     exactamente con la suma de lo que Claude reportó originalmente
+     por foto (aiTotal) — cualquier corrección, por foto o global,
+     baja la confianza a "media", igual que el operario la vería
+     si hubiese corregido una foto única. */
+  const rawSum=multifotos.reduce((s,f)=>s+(f.result?.aiTotal??f.result?.total??0),0);
+  const wasCorrected=multiTotal!==rawSum;
+  const confidence=wasCorrected?'media':'alta';
   counts={c4:singleSize==='4'?multiTotal:0,c8:singleSize==='8'?multiTotal:0,c12:singleSize==='12'?multiTotal:0,total:multiTotal};
   qs('#c4').textContent=singleSize==='4'?multiTotal:'—';
   qs('#c8').textContent=singleSize==='8'?multiTotal:'—';
   qs('#c12').textContent=singleSize==='12'?multiTotal:'—';
   qs('#cT').textContent=multiTotal;
-  const breakdown=multifotos.map((f,i)=>`F${i+1}:${f.result?.total||0}`).join(' ');
-  setStatus('statusCount',`✓ Total ${multiTotal} uds de ${multifotos.length} fotos (${breakdown})`,'#3ecf8e');
+  setStatus('statusCount',`✓ Total ${multiTotal} uds de ${multifotos.length} fotos`,'#3ecf8e');
   const alb=parseInt(qs('#albaranQty').value)||0;
   renderAlbaranStatus(multiTotal,alb);
   qs('#resultsCount').style.display='block';
   qs('#manualAdj').style.display='flex';
   qs('#btnSaveExample').style.display='none';
   qs('#btnZones').style.display='none'; exitZonesView();
-  lastConfidence='alta';
+  lastConfidence=confidence;
   saveHistoryEntry({
     date:new Date().toLocaleDateString('es-ES')+' '+new Date().toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'}),
-    total:multiTotal,aiTotal:multiTotal,size4:counts.c4,size8:counts.c8,size12:counts.c12,
-    product:(qs('#productDesc').value||'').slice(0,60),confidence:'alta',
-    notes:`Multifoto ${multifotos.length} fotos · ${breakdown}`,
+    total:multiTotal,aiTotal:rawSum,size4:counts.c4,size8:counts.c8,size12:counts.c12,
+    product:(qs('#productDesc').value||'').slice(0,60),confidence,
+    notes:null,
+    photoBreakdown:multifotos.map(f=>f.result?.total||0),
     albaran:alb||null
     // ODOO - pendiente de implementar: odoo:buildOdooText()
   });
   renderExampleCounts();
-  showToast(`Total ${multiTotal} uds ✓`);
+  showToast(`✓ Total confirmado: ${multiTotal} uds de ${singleSize}mm`);
   vibrateDone();
+  const resEl=qs('#resultsCount');
+  if(resEl)setTimeout(()=>resEl.scrollIntoView({behavior:'smooth',block:'start'}),50);
 };
 
 /* ══ FOTO ÚNICA ══ */
@@ -1231,12 +1316,21 @@ window.renderHistory=function(){
       :cd
       ?`<span style="font-size:12px;font-weight:700;color:${cd.color};display:inline-flex;align-items:center;gap:3px;flex-shrink:0">${cd.icon} ${cd.label}</span>`
       :`<span style="font-size:12px;color:var(--muted);flex-shrink:0">—</span>`;
+    /* v7.9.6: desglose por foto de las entradas de multifoto, más
+       visible que el antiguo "F1:49 F2:51" comprimido en notes. */
+    const photoBreakdownHtml=Array.isArray(e.photoBreakdown)&&e.photoBreakdown.length>0
+      ?`<div style="font-size:11px;color:var(--hint);margin-bottom:6px;line-height:1.9">
+          ${e.photoBreakdown.map((n,idx)=>`📷 Foto ${idx+1}: ${n} uds`).join('<br>')}
+        </div>
+        <div style="border-top:0.5px dashed var(--border);margin-bottom:6px"></div>`
+      :'';
     return `<div style="background:var(--surface);border:0.5px solid var(--border);border-radius:var(--radius);padding:12px;margin-bottom:10px">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px;gap:8px">
         ${totalDisplay}
         ${confBadge}
       </div>
       <div style="font-size:11px;color:var(--muted);margin-bottom:4px">${e.date}</div>
+      ${photoBreakdownHtml}
       ${notesShort?`<div style="font-size:11px;color:var(--hint);font-style:italic;margin-bottom:6px">${notesShort}</div>`:''}
       <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;align-items:center">
         ${sizeBadge}

@@ -138,7 +138,7 @@
     <h1>Pellet Counter <span class="ai-badge">✦ Claude AI</span></h1>
     <div style="display:flex;align-items:center;gap:10px">
       <div id="analyzeSpinner" class="spinner"></div>
-      <span class="ver">v7.9.5</span>
+      <span class="ver">v7.9.6</span>
     </div>
   </div>
   <div class="subbar" id="exCounts" style="border-bottom:none;padding-bottom:2px"></div>
@@ -214,12 +214,16 @@
         </div>
 
         <div class="status-bar" id="multiStatus" style="display:none"></div>
+
+        <div class="tip" id="multiInstructions" style="margin-bottom:10px">
+          💡 Revisa cada foto y corrige si es necesario. Toca el número para editarlo directamente. Cuando todo esté correcto, pulsa "Confirmar total".
+        </div>
         <div id="multiList"></div>
 
         <div style="text-align:center;margin:8px 0">
           <div class="m-label">Total acumulado</div>
-          <div class="multi-total-badge" id="multiTotal">0</div>
-          <div class="m-sub">suma de todas las fotos</div>
+          <input type="number" id="multiTotal" value="0" onchange="setMultiTotalManual(this.value)" class="multi-total-badge" style="background:transparent;border:none;text-align:center;width:100%;padding:0;-webkit-appearance:none;appearance:none">
+          <div class="m-sub">toca el número para editar directamente</div>
         </div>
 
         <!-- Ajuste manual ±1 sobre el total acumulado -->
@@ -471,15 +475,18 @@
       <div class="card">
         <p class="card-label">Acerca de</p>
         <div style="font-size:12px;color:var(--muted);line-height:2.2">
-          <div><strong style="color:var(--text)">Pellet Counter v7.9.5</strong></div>
+          <div><strong style="color:var(--text)">Pellet Counter v7.9.6</strong></div>
           <div>Motor IA · Claude Sonnet Vision</div>
+          <div>Fix multifoto · productDesc congelado por lote (no confunde tamaños)</div>
+          <div>Miniaturas de multifoto arregladas · blob URL en vez de base64 recortado</div>
+          <div>Corrección de foto y total editable · tap para escribir el número</div>
+          <div>Confianza multifoto · "media" si hubo alguna corrección manual</div>
+          <div>Desglose por foto en Historial · más visible, con total corregido</div>
           <div>Exportación a Odoo retirada · pendiente de reimplementar</div>
           <div>Guardado explícito en Pesada rápida · botón "💾 Guardar pesada"</div>
           <div>Pesos unitarios protegidos · edición solo en Ajustes con PIN admin</div>
-          <div>Ajuste ±1 en multifoto · total acumulado y foto a foto</div>
           <div>Corrección visible en pesadas · igual que en visión IA</div>
           <div>Historial · "📋 Copiar resultado" en texto plano, sin Odoo</div>
-          <div>Fix multifoto · usa el mismo perfil de tamaño que foto única</div>
           <div>Peso 4mm corregido · 0.071g/ud, verificado con 2 básculas</div>
           <div>Referencia del bote · card colapsable con peso vacío y procedimiento</div>
           <div>Fix multifoto · reintento JSON igual que foto única</div>
@@ -523,13 +530,13 @@
   <button class="btn-primary" id="installBtn" style="flex-shrink:0">Instalar</button>
 </div>
 
-<!-- splash v7.9.5 -->
+<!-- splash v7.9.6 -->
 <div id="splash" style="position:fixed;inset:0;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:9999;transition:opacity 0.4s">
   <div style="font-size:44px;margin-bottom:14px">⬤</div>
   <div style="font-size:20px;font-weight:700;color:var(--text);letter-spacing:-0.5px">Pellet Counter</div>
   <div style="font-size:12px;color:var(--green);font-weight:600;margin-top:6px;display:flex;align-items:center;gap:8px">
     <span>✦ Claude AI</span><span style="color:var(--hint)">·</span>
-    <span style="font-family:monospace;color:var(--blue)">v7.9.5</span>
+    <span style="font-family:monospace;color:var(--blue)">v7.9.6</span>
   </div>
   <div style="margin-top:28px;width:60px;height:2px;background:var(--surface2);border-radius:2px;overflow:hidden">
     <div style="height:100%;background:linear-gradient(90deg,var(--blue),var(--green));border-radius:2px;animation:load 1.3s ease-out forwards"></div>
