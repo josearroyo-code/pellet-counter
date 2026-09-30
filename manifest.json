@@ -1,10 +1,10 @@
 {
   "name": "Pellet Counter",
   "short_name": "Pellets",
-  "description": "Conteo automático de pellets 4mm · 8mm · 12mm con exportación a Odoo",
+  "description": "Conteo automático de pellets 4mm · 8mm · 12mm con Claude Vision",
   "start_url": "./index.html",
   "display": "standalone",
-  "orientation": "portrait",
+  "orientation": "any",
   "background_color": "#0e0e0e",
   "theme_color": "#0e0e0e",
   "icons": [

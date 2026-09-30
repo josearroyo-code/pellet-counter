@@ -93,25 +93,55 @@
     .big-toast-ok{background:var(--green-dim);color:var(--green);border:2px solid var(--green);}
     .big-toast-error{background:var(--orange-dim);color:var(--orange);border:2px solid var(--orange);}
 
-    /* ── landscape: foto izq / controles der ── */
+    /* ── layout dos columnas: Contar (foto izq / controles der) ── */
     .count-layout{display:flex;flex-direction:column;}
-    @media (orientation:landscape) and (min-width:600px){
-      .count-layout{flex-direction:row;align-items:flex-start;gap:16px;}
-      .count-left{order:1;flex:0 0 55%;max-width:55%;}
-      .count-right{order:2;flex:0 0 45%;max-width:45%;}
+    /* ── layout dos columnas: Pesar (tamaño+peso izq / resultado der) ── */
+    .grav-layout{display:flex;flex-direction:column;}
+
+    /* ── tablet portrait (768-1024px): controles e inputs más grandes,
+       área de toque ≥48px para dedo/stylus en Surface — sin columnas
+       todavía, eso empieza en tablet landscape >1024px más abajo ── */
+    @media (min-width:768px){
+      /* min-height NO va en el selector genérico button{} a propósito:
+         hay botones deliberadamente compactos (± por foto en multifoto,
+         ✕ de eliminar) que romperían su layout en fila si se forzaran
+         a 48px. El padding más grande ya deja los botones normales por
+         encima de 48px de alto de forma natural. */
+      button{font-size:15px;padding:14px 20px;}
+      .adj-btn{width:56px;height:56px;font-size:28px;}
+      .card{padding:20px;}
+      .content{padding:20px 20px calc(var(--safe-bot)+70px);}
+      .prof-bar{gap:12px;}
+      .prof-bar button,.quick-size-btn{font-size:14px;padding:14px 8px;}
+      .btn-row{gap:12px;}
+      .m-value{font-size:28px;}
+      .m-label{font-size:11px;}
+      .m-sub{font-size:10px;}
+      .card-label,.section-label,.quick-step-label{font-size:12px;}
+      .results-grid{gap:12px;}
+      .upload-zone{padding:40px 16px;}
+      .topbar h1{font-size:18px;}
+      .tab{font-size:14px;padding:14px 4px;min-height:48px;}
+      input,textarea,select{padding:12px;font-size:16px;min-height:48px;}
     }
 
-    /* ── tablet/Surface: controles más grandes ── */
-    @media (min-width:768px){
-      button{font-size:14px;padding:11px 18px;}
-      .adj-btn{width:52px;height:52px;font-size:26px;}
-      .card{padding:18px;}
-      .content{padding:20px 24px calc(var(--safe-bot)+70px);}
-      .prof-bar button{font-size:13px;padding:9px 6px;}
+    /* ── tablet landscape (>1024px): layout de dos columnas, sin scroll
+       para ver foto+resultado a la vez ── */
+    @media (orientation:landscape) and (min-width:1024px){
+      .count-layout{flex-direction:row;align-items:flex-start;gap:20px;}
+      .count-left{order:1;flex:0 0 55%;max-width:55%;}
+      .count-right{order:2;flex:0 0 45%;max-width:45%;}
+      .grav-layout{flex-direction:row;align-items:flex-start;gap:20px;}
+      .grav-left{flex:0 0 48%;max-width:48%;}
+      .grav-right{flex:0 0 48%;max-width:48%;}
+      #historyList{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
     }
-    @media (orientation:landscape) and (min-width:768px){
-      .count-left{flex:0 0 58%;max-width:58%;}
-      .count-right{flex:0 0 42%;max-width:42%;}
+
+    /* ── Surface Pro (pantalla 13", >1200px landscape): panel de foto
+       fijo mientras el panel de controles hace scroll propio ── */
+    @media (orientation:landscape) and (min-width:1200px){
+      .count-left{flex:0 0 60%;max-width:60%;position:sticky;top:0;align-self:flex-start;}
+      .count-right{flex:0 0 40%;max-width:40%;max-height:calc(100dvh - var(--safe-top) - 120px);overflow-y:auto;}
     }
 
     /* ── sub-tabs de historial ── */
@@ -126,9 +156,6 @@
     .quick-result-sub{font-size:12px;color:var(--muted);margin-top:4px;}
     .quick-error-line{font-size:12px;color:var(--text);font-weight:700;margin-top:8px;font-family:'SF Mono','Fira Code',monospace;}
     .quick-meta{font-size:11px;color:var(--hint);margin-top:6px;}
-
-    /* ── referencia del bote (colapsable) ── */
-    #boteRefCard .card-label{margin-bottom:0}
   </style>
 </head>
 <body>
@@ -138,7 +165,7 @@
     <h1>Pellet Counter <span class="ai-badge">✦ Claude AI</span></h1>
     <div style="display:flex;align-items:center;gap:10px">
       <div id="analyzeSpinner" class="spinner"></div>
-      <span class="ver">v7.9.6</span>
+      <span class="ver">v7.9.7</span>
     </div>
   </div>
   <div class="subbar" id="exCounts" style="border-bottom:none;padding-bottom:2px"></div>
@@ -310,72 +337,53 @@
     <!-- ══ PESAR ══ -->
     <div class="panel" id="panel-grav">
 
-      <!-- ══ REFERENCIA DEL BOTE (colapsable, expandida por defecto) ══ -->
-      <div class="card" id="boteRefCard">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:8px">
-          <p class="card-label">📦 Referencia del bote</p>
-          <button id="btnToggleBoteRef" onclick="toggleBoteRef()" style="font-size:11px;padding:5px 10px;flex-shrink:0">▼ Ocultar referencia</button>
-        </div>
-        <div id="boteRefBody">
-          <p style="font-size:13px;font-weight:700;margin-bottom:10px">Peso bote vacío: <span style="color:var(--blue)">47.86g</span></p>
-          <div class="warn" style="margin-bottom:10px">
-            <strong>⚠️ IMPORTANTE:</strong><br>
-            • Espera 3 min tras encender la báscula antes de pesar<br>
-            • Aleja de corrientes de aire<br>
-            • Siempre haz TARA antes de cada pesada (no uses memoria)<br>
-            • Si el peso varía ±0.05g es normal — usa el valor más estable tras 30 segundos
-          </div>
-          <div class="tip" style="margin-bottom:0">
-            <strong>Procedimiento:</strong><br>
-            1️⃣ Enciende la báscula → espera 3 minutos<br>
-            2️⃣ Coloca la bandeja → pulsa TARA → pantalla a 0<br>
-            3️⃣ Vierte los pellets del bote<br>
-            4️⃣ Espera que el número se estabilice (~10 seg)<br>
-            5️⃣ Introduce el peso en la app
-          </div>
-        </div>
-      </div>
-
+      <p style="font-size:12px;color:var(--muted);margin-bottom:8px">📦 Peso del bote vacío: 47.86g</p>
       <p style="font-size:12px;color:var(--muted);margin-bottom:12px">⚖️ Pesos unitarios actuales: <span id="pesosInfoLine">—</span><br><span style="font-size:11px;color:var(--hint)">Editables solo por administrador en Ajustes → Pesos unitarios.</span></p>
 
       <!-- ══ PESADA RÁPIDA (principal) ══ -->
       <div class="card">
         <p class="card-label">⚖️ Pesada rápida de lote</p>
 
-        <p class="quick-step-label">PASO 1 · Selecciona el tamaño</p>
-        <div class="prof-bar" style="margin-bottom:14px">
-          <button class="quick-size-btn" data-key="4"  onclick="selectQuickSize('4')">● 4mm</button>
-          <button class="quick-size-btn" data-key="8"  onclick="selectQuickSize('8')">● 8mm</button>
-          <button class="quick-size-btn" data-key="12" onclick="selectQuickSize('12')">● 12mm</button>
-        </div>
+        <div class="grav-layout">
+          <div class="grav-left">
+            <p class="quick-step-label">PASO 1 · Selecciona el tamaño</p>
+            <div class="prof-bar" style="margin-bottom:14px">
+              <button class="quick-size-btn" data-key="4"  onclick="selectQuickSize('4')">● 4mm</button>
+              <button class="quick-size-btn" data-key="8"  onclick="selectQuickSize('8')">● 8mm</button>
+              <button class="quick-size-btn" data-key="12" onclick="selectQuickSize('12')">● 12mm</button>
+            </div>
 
-        <p class="quick-step-label">PASO 2 · Peso neto (después de hacer TARA)</p>
-        <input type="number" id="quickNetWeight" placeholder="0.000" step="0.001" min="0" style="font-size:20px;font-weight:700;padding:12px;margin-bottom:14px" oninput="calcQuickWeigh()">
-
-        <div id="quickResultBox" style="display:none">
-          <p class="quick-step-label">PASO 3 · Resultado</p>
-          <div class="quick-result-box">
-            <div id="quickQty">0</div>
-            <div class="quick-result-sub">unidades</div>
-            <div id="quickErrorLine" class="quick-error-line"></div>
-            <div id="quickMeta" class="quick-meta"></div>
+            <p class="quick-step-label">PASO 2 · Peso neto (después de hacer TARA)</p>
+            <input type="number" id="quickNetWeight" placeholder="0.000" step="0.001" min="0" style="font-size:20px;font-weight:700;padding:12px;margin-bottom:14px" oninput="calcQuickWeigh()">
           </div>
 
-          <!-- Ajuste manual ±1 -->
-          <div class="manual-adj" id="quickManualAdj" style="display:flex">
-            <button class="adj-btn" onclick="adjustQuickCount(-1)" style="background:var(--orange-dim);border-color:var(--orange);color:var(--orange)">−</button>
-            <div class="adj-label">Corrección<br>manual ±1</div>
-            <button class="adj-btn" onclick="adjustQuickCount(+1)" style="background:var(--green-dim);border-color:var(--green);color:var(--green)">＋</button>
+          <div class="grav-right">
+            <div id="quickResultBox" style="display:none">
+              <p class="quick-step-label">PASO 3 · Resultado</p>
+              <div class="quick-result-box">
+                <div id="quickQty">0</div>
+                <div class="quick-result-sub">unidades</div>
+                <div id="quickErrorLine" class="quick-error-line"></div>
+                <div id="quickMeta" class="quick-meta"></div>
+              </div>
+
+              <!-- Ajuste manual ±1 -->
+              <div class="manual-adj" id="quickManualAdj" style="display:flex">
+                <button class="adj-btn" onclick="adjustQuickCount(-1)" style="background:var(--orange-dim);border-color:var(--orange);color:var(--orange)">−</button>
+                <div class="adj-label">Corrección<br>manual ±1</div>
+                <button class="adj-btn" onclick="adjustQuickCount(+1)" style="background:var(--green-dim);border-color:var(--green);color:var(--green)">＋</button>
+              </div>
+
+              <button id="btnSaveQuick" class="btn-success" onclick="saveQuickPesada()" style="width:100%;justify-content:center;padding:10px;margin-bottom:10px">💾 Guardar pesada</button>
+
+              <div id="quick4mmTip" class="tip" style="display:none">
+                💡 Si el resultado parece incorrecto: pesa 10 pellets de ESTE bote específico y divide entre 10 para verificar el peso unitario — puede variar entre botes. Un administrador puede actualizarlo en Ajustes → Pesos unitarios.
+              </div>
+
+              <div id="quickPrecisionNote" class="tip" style="margin-bottom:10px"></div>
+              <button id="btnVerifyVision" class="btn-primary" style="width:100%;justify-content:center" onclick="verifyWithVision()">📷 Verificar con visión IA</button>
+            </div>
           </div>
-
-          <button id="btnSaveQuick" class="btn-success" onclick="saveQuickPesada()" style="width:100%;justify-content:center;padding:10px;margin-bottom:10px">💾 Guardar pesada</button>
-
-          <div id="quick4mmTip" class="tip" style="display:none">
-            💡 Si el resultado parece incorrecto: pesa 10 pellets de ESTE bote específico y divide entre 10 para verificar el peso unitario — puede variar entre botes. Un administrador puede actualizarlo en Ajustes → Pesos unitarios.
-          </div>
-
-          <div id="quickPrecisionNote" class="tip" style="margin-bottom:10px"></div>
-          <button id="btnVerifyVision" class="btn-primary" style="width:100%;justify-content:center" onclick="verifyWithVision()">📷 Verificar con visión IA</button>
         </div>
       </div>
 
@@ -475,8 +483,12 @@
       <div class="card">
         <p class="card-label">Acerca de</p>
         <div style="font-size:12px;color:var(--muted);line-height:2.2">
-          <div><strong style="color:var(--text)">Pellet Counter v7.9.6</strong></div>
+          <div><strong style="color:var(--text)">Pellet Counter v7.9.7</strong></div>
           <div>Motor IA · Claude Sonnet Vision</div>
+          <div>Prompt 4mm · aviso anti-sobreconteo, conservador en caso de duda</div>
+          <div>Adaptado a Surface Pro y tablets · dos columnas en landscape</div>
+          <div>Áreas de toque ≥48px · controles más grandes para dedo/stylus</div>
+          <div>Referencia del bote · solo el dato de peso, sin avisos ni pasos</div>
           <div>Fix multifoto · productDesc congelado por lote (no confunde tamaños)</div>
           <div>Miniaturas de multifoto arregladas · blob URL en vez de base64 recortado</div>
           <div>Corrección de foto y total editable · tap para escribir el número</div>
@@ -488,7 +500,6 @@
           <div>Corrección visible en pesadas · igual que en visión IA</div>
           <div>Historial · "📋 Copiar resultado" en texto plano, sin Odoo</div>
           <div>Peso 4mm corregido · 0.071g/ud, verificado con 2 básculas</div>
-          <div>Referencia del bote · card colapsable con peso vacío y procedimiento</div>
           <div>Fix multifoto · reintento JSON igual que foto única</div>
           <div>Historial con filtro Todos/Visión/Báscula · contador combinado</div>
           <div>⚖️ Pesada rápida · única sección de báscula, sin tara manual</div>
@@ -530,13 +541,13 @@
   <button class="btn-primary" id="installBtn" style="flex-shrink:0">Instalar</button>
 </div>
 
-<!-- splash v7.9.6 -->
+<!-- splash v7.9.7 -->
 <div id="splash" style="position:fixed;inset:0;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:9999;transition:opacity 0.4s">
   <div style="font-size:44px;margin-bottom:14px">⬤</div>
   <div style="font-size:20px;font-weight:700;color:var(--text);letter-spacing:-0.5px">Pellet Counter</div>
   <div style="font-size:12px;color:var(--green);font-weight:600;margin-top:6px;display:flex;align-items:center;gap:8px">
     <span>✦ Claude AI</span><span style="color:var(--hint)">·</span>
-    <span style="font-family:monospace;color:var(--blue)">v7.9.6</span>
+    <span style="font-family:monospace;color:var(--blue)">v7.9.7</span>
   </div>
   <div style="margin-top:28px;width:60px;height:2px;background:var(--surface2);border-radius:2px;overflow:hidden">
     <div style="height:100%;background:linear-gradient(90deg,var(--blue),var(--green));border-radius:2px;animation:load 1.3s ease-out forwards"></div>

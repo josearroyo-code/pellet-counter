@@ -1,6 +1,27 @@
 /* ══════════════════════════════════════════
-   Pellet Counter v7.9.6 — fixes de multifoto con datos reales
-   FIX CRÍTICO: el refuerzo de PELLET_PROFILES de v7.9.5 no bastó —
+   Pellet Counter v7.9.7 — adaptado a Surface Pro/tablets, prompt 4mm
+   NUEVO: PELLET_PROFILES['4'] añade un aviso anti-sobreconteo —
+          ante la duda entre N y N+1, elegir el menor; ser
+          conservador con zonas oscuras de pellets muy juntos.
+   SIMPLIFICADO: la card "Referencia del bote" en tab Pesar perdió el
+          bloque de avisos "⚠️ IMPORTANTE" y el procedimiento en 5
+          pasos — ahora es solo una línea con el peso del bote vacío
+          (toggleBoteRef/initBoteRef se eliminaron, ya no hay nada
+          que colapsar).
+   NUEVO: adaptación responsive a Surface Pro y tablets en general —
+          nuevos breakpoints en index.html (tablet portrait 768-
+          1024px: controles/inputs más grandes, áreas de toque
+          ≥48px; tablet landscape >1024px: layout de dos columnas en
+          Contar y Pesar, Historial en grid de 2 columnas; >1200px
+          landscape: columna de foto fija/sticky mientras la de
+          controles hace scroll propio). Sin cambios en JS más allá
+          de un pequeño ajuste de tamaño en el input de corrección
+          por foto de multifoto para que no herede el min-height:48px
+          de los inputs normales.
+   FIX: manifest.json tenía "orientation":"portrait", que bloquearía
+          el layout horizontal en la PWA instalada en un Surface —
+          cambiado a "orientation":"any".
+   v7.9.6: FIX CRÍTICO: el refuerzo de PELLET_PROFILES de v7.9.5 no bastó —
           Claude seguía diciendo "condensadores cerámicos" en
           multifoto en pruebas reales. analyzeOneFoto() ya no vuelve
           a leer #productDesc en cada foto: usa un snapshot congelado
@@ -149,7 +170,7 @@
    Fix: JSON parser robusto
    ══════════════════════════════════════════ */
 
-const VERSION = 'v7.9.6';
+const VERSION = 'v7.9.7';
 let lastImageBase64 = null;
 let lastImageMime   = 'image/jpeg';
 let isAnalyzing     = false;
@@ -174,7 +195,7 @@ const qs  = s => document.querySelector(s);
 const qsa = s => document.querySelectorAll(s);
 
 const PELLET_PROFILES = {
-  '4': "Electrodos de disco sinterizado de 4mm de diámetro, de aplicación médica — NO son condensadores cerámicos, resistencias ni ningún otro componente electrónico, aunque el disco pequeño con un hilo metálico pueda recordar a uno. Son los discos MÁS PEQUEÑOS de la imagen — significativamente más pequeños que los de 8mm y 12mm. Color rosado o marrón claro cuando son nuevos, se vuelven gris oscuro o marrón oscuro con la exposición a la luz — ambos colores son el mismo producto. Pesan aproximadamente 0.08g cada uno. Tienen un hilo fino metálico saliendo del centro, muy difícil de ver a esta escala. INSTRUCCIONES CRÍTICAS: son extremadamente pequeños y tienden a agruparse. Si ves una zona con varios puntos oscuros juntos, asume que son múltiples discos individuales y cuenta cada punto circular por separado. Cuenta cada disco individualmente aunque se toquen o solapen. Ignora completamente los hilos metálicos — son líneas finas, no discos.",
+  '4': "Electrodos de disco sinterizado de 4mm de diámetro, de aplicación médica — NO son condensadores cerámicos, resistencias ni ningún otro componente electrónico, aunque el disco pequeño con un hilo metálico pueda recordar a uno. Son los discos MÁS PEQUEÑOS de la imagen — significativamente más pequeños que los de 8mm y 12mm. Color rosado o marrón claro cuando son nuevos, se vuelven gris oscuro o marrón oscuro con la exposición a la luz — ambos colores son el mismo producto. Pesan aproximadamente 0.08g cada uno. Tienen un hilo fino metálico saliendo del centro, muy difícil de ver a esta escala. INSTRUCCIONES CRÍTICAS: son extremadamente pequeños y tienden a agruparse. Si ves una zona con varios puntos oscuros juntos, asume que son múltiples discos individuales y cuenta cada punto circular por separado. Cuenta cada disco individualmente aunque se toquen o solapen. Ignora completamente los hilos metálicos — son líneas finas, no discos. ATENCIÓN AL SOBRECONTEO: estos pellets son muy pequeños y tienden a aparecer más de lo que realmente son. Si dudas entre N y N+1, elige siempre el número menor. Cuando veas una zona oscura con pellets muy juntos, sé conservador — es mejor quedarse corto 1-2 unidades que pasarse.",
   '8': "Electrodos de disco sinterizado de 8mm de diámetro, de aplicación médica — NO son condensadores cerámicos, resistencias ni ningún otro componente electrónico, aunque el disco con un hilo metálico pueda recordar a uno. Son discos de tamaño MEDIANO — más pequeños que los de 12mm pero claramente más grandes que los de 4mm. Color rosado, malva o marrón dependiendo de la exposición a la luz. Pesan aproximadamente 0.32g cada uno. Tienen un hilo fino metálico saliendo del centro. Cuando dos discos se toquen o solapen parcialmente cuenta cada uno como unidad independiente. Si hay solapamiento en zona central agrupa visualmente y estima cuántos discos hay en esa zona. Ignora completamente los hilos metálicos.",
   '12': "Electrodos de disco sinterizado de 12mm de diámetro, de aplicación médica — NO son condensadores cerámicos, resistencias ni ningún otro componente electrónico, aunque el disco con un hilo metálico pueda recordar a uno. Son los discos MÁS GRANDES de la imagen — notablemente más grandes que los de 8mm. Color rosado, malva o marrón dependiendo de la exposición a la luz — pueden verse claros (rosado/beige) o más oscuros (marrón). Pesan aproximadamente 0.70g cada uno. Tienen un hilo fino metálico de conexión saliendo del centro, a veces doblado o pegado al disco y difícil de ver. Al ser grandes son fáciles de distinguir individualmente. Cuenta cada disco circular grande por separado aunque se toquen en los bordes. Ignora completamente los hilos metálicos."
 };
@@ -196,7 +217,6 @@ document.addEventListener('DOMContentLoaded', () => {
   migrateP4Weight();
   restoreSettings(); initUnitWeights(); loadHistory(); updateHistoryBadge();
   renderProductSelector(); renderExampleCounts(); updateFewshotNotice(); renderWeighCounts();
-  initBoteRef();
   selectQuickSize(quickSize);
   const ap = localStorage.getItem('activeProfile');
   if (ap) setTimeout(() => highlightProfile(ap), 100);
@@ -382,7 +402,7 @@ function renderMultiList() {
         <div style="display:flex;align-items:center;gap:6px">
           ${f.result?`
             <button onclick="adjustMultiFotoCount(${i},-1)" style="width:24px;height:24px;padding:0;font-size:13px;border-radius:6px;justify-content:center;flex-shrink:0">−</button>
-            <input type="number" value="${f.result.total}" onchange="setMultiFotoCount(${i},this.value)" style="width:56px;text-align:center;padding:4px 2px;font-size:14px;font-weight:700;flex-shrink:0">
+            <input type="number" value="${f.result.total}" onchange="setMultiFotoCount(${i},this.value)" style="width:56px;min-height:24px;text-align:center;padding:4px 2px;font-size:14px;font-weight:700;flex-shrink:0">
             <button onclick="adjustMultiFotoCount(${i},1)" style="width:24px;height:24px;padding:0;font-size:13px;border-radius:6px;justify-content:center;flex-shrink:0">＋</button>
             <span style="font-size:11px;color:var(--muted)">uds</span>
           `:`<span style="font-size:14px;font-weight:700;color:var(--muted)">${f.analyzing?'⏳ Analizando…':'⏸ En cola'}</span>`}
@@ -1095,22 +1115,10 @@ window.saveUnitWeights=function(){
   renderPesosReadOnly();
 };
 
-/* ══ REFERENCIA DEL BOTE (card colapsable, tab Pesar) ══ */
-window.toggleBoteRef=function(){
-  const body=qs('#boteRefBody'),btn=qs('#btnToggleBoteRef');
-  if(!body||!btn)return;
-  const collapsed=body.style.display!=='none';
-  body.style.display=collapsed?'none':'block';
-  btn.textContent=collapsed?'▶ Mostrar referencia':'▼ Ocultar referencia';
-  localStorage.setItem('boteRefCollapsed',collapsed?'1':'0');
-};
-function initBoteRef(){
-  const body=qs('#boteRefBody'),btn=qs('#btnToggleBoteRef');
-  if(!body||!btn)return;
-  const collapsed=localStorage.getItem('boteRefCollapsed')==='1';
-  body.style.display=collapsed?'none':'block';
-  btn.textContent=collapsed?'▶ Mostrar referencia':'▼ Ocultar referencia';
-}
+/* v7.9.7: la card "Referencia del bote" (colapsable, con avisos y
+   procedimiento) se simplificó a una sola línea informativa en el
+   HTML — toggleBoteRef/initBoteRef ya no tienen elementos que
+   controlar y se eliminaron. */
 
 /* ══ PESADA RÁPIDA ══
    El operario ya hace la tara en la báscula física — la app recibe
