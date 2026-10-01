@@ -165,7 +165,7 @@
     <h1>Pellet Counter <span class="ai-badge">✦ Claude AI</span></h1>
     <div style="display:flex;align-items:center;gap:10px">
       <div id="analyzeSpinner" class="spinner"></div>
-      <span class="ver">v7.9.8</span>
+      <span class="ver">v7.9.9</span>
     </div>
   </div>
   <div class="subbar" id="exCounts" style="border-bottom:none;padding-bottom:2px"></div>
@@ -262,9 +262,10 @@
           <button class="adj-btn" onclick="adjustMultiTotalManual(+1)" style="background:var(--green-dim);border-color:var(--green);color:var(--green)">＋</button>
         </div>
 
-        <!-- FIX v7.9.8: sin onclick inline — se delega al click de document
-             en DOMContentLoaded, ver app.js -->
-        <button id="btnMultiConfirm" class="btn-success" style="display:none;width:100%;justify-content:center;padding:12px;font-size:14px">
+        <!-- v7.9.9: onclick directo + delegación en document (app.js) como
+             doble camino — confirmMultiTotal() tiene guarda anti-duplicado
+             (multiConfirmed) por si ambos llegaran a dispararse a la vez -->
+        <button id="btnMultiConfirm" class="btn-success" onclick="confirmMultiTotal()" style="display:none;width:100%;justify-content:center;padding:12px;font-size:14px">
           ✓ Confirmar total
         </button>
       </div>
@@ -488,10 +489,25 @@
         </div>
       </div>
       <div class="card">
+        <p class="card-label">🔍 Depuración</p>
+        <p style="font-size:11px;color:var(--hint);margin-bottom:10px;line-height:1.5">Registro de consola para diagnosticar problemas sin DevTools en el móvil.</p>
+        <button id="btnShowDebugLog" onclick="showDebugLog()" style="width:100%;justify-content:center">🔍 Ver último log</button>
+        <div id="debugLogBox" style="display:none;margin-top:10px">
+          <textarea id="debugLogText" readonly rows="10" style="font-family:'SF Mono','Fira Code',monospace;font-size:10px;resize:vertical"></textarea>
+          <div class="btn-row" style="margin-top:8px">
+            <button onclick="copyDebugLog()">📋 Copiar log</button>
+            <button onclick="clearDebugLog()" style="color:var(--orange);border-color:var(--orange)">🗑 Limpiar</button>
+          </div>
+        </div>
+      </div>
+      <div class="card">
         <p class="card-label">Acerca de</p>
         <div style="font-size:12px;color:var(--muted);line-height:2.2">
-          <div><strong style="color:var(--text)">Pellet Counter v7.9.8</strong></div>
+          <div><strong style="color:var(--text)">Pellet Counter v7.9.9</strong></div>
           <div>Motor IA · Claude Sonnet Vision</div>
+          <div>Fix real multifoto · prompt alineado con foto única (datos A/B)</div>
+          <div>Log de depuración · "🔍 Ver último log" en Ajustes, sin DevTools</div>
+          <div>Fix duplicado en Historial · guarda contra doble confirmación</div>
           <div>Fix botón Confirmar total · delegación de eventos (no respondía)</div>
           <div>Bote vacío · card destacada y siempre visible en Pesar</div>
           <div>Prompt multifoto · aviso explícito contra condensadores/termistores</div>
@@ -554,13 +570,13 @@
   <button class="btn-primary" id="installBtn" style="flex-shrink:0">Instalar</button>
 </div>
 
-<!-- splash v7.9.8 -->
+<!-- splash v7.9.9 -->
 <div id="splash" style="position:fixed;inset:0;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:9999;transition:opacity 0.4s">
   <div style="font-size:44px;margin-bottom:14px">⬤</div>
   <div style="font-size:20px;font-weight:700;color:var(--text);letter-spacing:-0.5px">Pellet Counter</div>
   <div style="font-size:12px;color:var(--green);font-weight:600;margin-top:6px;display:flex;align-items:center;gap:8px">
     <span>✦ Claude AI</span><span style="color:var(--hint)">·</span>
-    <span style="font-family:monospace;color:var(--blue)">v7.9.8</span>
+    <span style="font-family:monospace;color:var(--blue)">v7.9.9</span>
   </div>
   <div style="margin-top:28px;width:60px;height:2px;background:var(--surface2);border-radius:2px;overflow:hidden">
     <div style="height:100%;background:linear-gradient(90deg,var(--blue),var(--green));border-radius:2px;animation:load 1.3s ease-out forwards"></div>

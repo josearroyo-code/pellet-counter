@@ -1,6 +1,29 @@
 /* ══════════════════════════════════════════
-   Pellet Counter v7.9.8 — fixes de multifoto con datos reales (ronda 2)
-   FIX CRÍTICO: "✓ Confirmar total" no respondía en Android real. El
+   Pellet Counter v7.9.9 — fix real de multifoto, logs de depuración
+   FIX REAL (con datos A/B del usuario): la MISMA foto daba 52/52 por
+          foto única y 62/52 (+10) por multifoto. Eso confirmó que el
+          problema estaba en analyzeOneFoto(), no en los pellets ni
+          el perfil. Causa real: el prompt de multifoto era menos
+          riguroso que el de runCountAI() (sin técnica de cuadrícula
+          ni REGLAS ABSOLUTAS) y afirmaba un rango fijo "20-30"
+          potencialmente sesgado. Se alinea el prompt con el de foto
+          única y se quita esa afirmación. La sospecha del usuario de
+          que la imagen se reenviaba redimensionada a 400px en
+          multifoto se descartó leyendo el código: ese resize
+          (EXAMPLE_MAX_DIM) solo se usa al guardar un ejemplo
+          few-shot, nunca en el envío a analizar.
+   NUEVO: captura de console.log/console.error en memoria + botón
+          "🔍 Ver último log" en Ajustes, para depurar sin DevTools en
+          el móvil (copiar/limpiar incluido).
+   NUEVO: console.log de prompt (primeros 200 car.) y tamaño de
+          imagen en ambos flujos (foto única y multifoto), para poder
+          compararlos directamente en el log.
+   FIX: "Confirmar total" duplicaba la entrada en Historial — guarda
+          multiConfirmed (con auto-reset a los 600ms, no permanente,
+          para no bloquear una segunda confirmación legítima tras
+          añadir más fotos al mismo lote) más onclick directo en el
+          botón además de la delegación de v7.9.8, por si acaso.
+   v7.9.8: FIX CRÍTICO: "✓ Confirmar total" no respondía en Android real. El
           onclick inline en el HTML se sustituyó por delegación de
           eventos en document (DOMContentLoaded) — pedido así
           explícitamente, aunque #btnMultiConfirm nunca se recrea
@@ -192,7 +215,26 @@
    Fix: JSON parser robusto
    ══════════════════════════════════════════ */
 
-const VERSION = 'v7.9.8';
+const VERSION = 'v7.9.9';
+
+/* ══ CAPTURA DE LOGS (v7.9.9) ══
+   No hay DevTools a mano en un móvil real — esto guarda los últimos
+   console.log/console.error en memoria para poder verlos desde
+   Ajustes → "🔍 Ver último log" y copiarlos para depurar a distancia. */
+let debugLogs = [];
+const MAX_DEBUG_LOGS = 300;
+function pushDebugLog(prefix, args) {
+  try {
+    const line = prefix + args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ');
+    debugLogs.push(line);
+    if (debugLogs.length > MAX_DEBUG_LOGS) debugLogs.shift();
+  } catch (err) { /* nunca romper la app por un fallo al loguear */ }
+}
+const _origConsoleLog = console.log.bind(console);
+console.log = (...args) => { _origConsoleLog(...args); pushDebugLog('', args); };
+const _origConsoleError = console.error.bind(console);
+console.error = (...args) => { _origConsoleError(...args); pushDebugLog('[ERROR] ', args); };
+
 let lastImageBase64 = null;
 let lastImageMime   = 'image/jpeg';
 let isAnalyzing     = false;
@@ -208,6 +250,10 @@ let multifotos = [];
 let multiTotal  = 0;
 let multiMode   = false;
 let multiManualAdjust = 0;
+/* v7.9.9: guarda contra doble ejecución de confirmMultiTotal() (el
+   historial se duplicaba al pulsar Confirmar) — se resetea en
+   resetMulti(), es decir, cada vez que se activa/desactiva multifoto. */
+let multiConfirmed = false;
 
 /* ── estado zonas / wakelock ── */
 let zonesActive = false;
@@ -276,6 +322,22 @@ function showToast(msg, isError) {
   t.style.opacity = '1'; clearTimeout(t._t);
   t._t = setTimeout(() => t.style.opacity = '0', 2500);
 }
+
+/* ══ VER LOG (Ajustes → 🔍 Depuración) ══ */
+window.showDebugLog = function() {
+  const box = qs('#debugLogBox'), ta = qs('#debugLogText');
+  const show = box.style.display === 'none';
+  box.style.display = show ? 'block' : 'none';
+  if (show) ta.value = debugLogs.length ? debugLogs.join('\n') : '(sin logs todavía)';
+};
+window.copyDebugLog = function() {
+  navigator.clipboard.writeText(debugLogs.join('\n') || '(sin logs)').then(() => showToast('Log copiado ✓'));
+};
+window.clearDebugLog = function() {
+  debugLogs = [];
+  const ta = qs('#debugLogText'); if (ta) ta.value = '';
+  showToast('Log borrado');
+};
 
 async function acquireWakeLock() {
   try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); }
@@ -416,7 +478,7 @@ function updateMultiSizeTip(){
    para no acumular memoria en una sesión larga de la PWA. */
 function resetMulti() {
   multifotos.forEach(f=>{if(f.blobUrl)URL.revokeObjectURL(f.blobUrl);});
-  multifotos=[]; multiTotal=0; multiManualAdjust=0; renderMultiList(); updateMultiTotal();
+  multifotos=[]; multiTotal=0; multiManualAdjust=0; multiConfirmed=false; renderMultiList(); updateMultiTotal();
 }
 
 function renderMultiList() {
@@ -545,25 +607,47 @@ async function analyzeOneFoto(entry) {
   const fewShotNote=fewShotCount>0
     ?`\nNOTA: antes de la foto a analizar se incluyen ${fewShotCount} imagen(es) de referencia con su conteo ya confirmado por texto. Son solo contexto de calibración — NO las cuentes. La imagen a contar es la ÚLTIMA, justo antes de este texto.\n`
     :'';
-  /* v7.9.8, tercer intento contra "condensadores cerámicos": v7.9.5 reforzó
-     PELLET_PROFILES, v7.9.6 congeló productDesc por lote — ninguno bastó.
-     Ahora se añade una línea "IMPORTANTE" explícita al PRINCIPIO del
-     prompt (antes del perfil), nombrando los componentes concretos con
-     los que Claude confunde los pellets. */
+  /* v7.9.9 FIX REAL: el usuario aportó un A/B con datos reales —
+     la MISMA foto daba 52/52 exacto por foto única y 62/52 (+10) por
+     multifoto. Eso descarta que el problema fuera los pellets o el
+     perfil (serían los mismos en ambos casos) y apunta directamente
+     a que este prompt era simplemente menos riguroso que el de
+     runCountAI(): le faltaba la técnica de cuadrícula mental y las
+     REGLAS ABSOLUTAS, y encima afirmaba "esto es un grupo de 20-30"
+     de forma fija — falso y potencialmente sesgando el conteo al
+     probar con una foto que en realidad tenía más. Se alinea el
+     rigor con runCountAI() y se quita la afirmación de rango fijo.
+     (La sospecha del usuario de que la imagen se reenviaba
+     redimensionada a 400px en multifoto NO es cierta — ese resize
+     [EXAMPLE_MAX_DIM] solo se aplica al guardar un ejemplo few-shot,
+     nunca al envío para análisis; ambas rutas ya mandaban la imagen
+     en su resolución original. Verificado leyendo el código, no
+     solo con los console.log de abajo.) */
   const prompt=`Eres un sistema experto de conteo industrial de precisión máxima.
 
 IMPORTANTE: Estás contando electrodos de disco de plata sinterizada, NO condensadores cerámicos, NO termistores, NO varistores. Son discos metálicos con un hilo fino.
 
 OBJETO A CONTAR: ${productDesc}
 
-Esta es UNA PARTE de un bote más grande dividido en grupos de 20-30 pellets para mayor precisión. Cuenta ÚNICAMENTE los pellets visibles en ESTA foto.
+Esta foto es uno de varios grupos en los que se ha dividido un bote más grande para contar con más precisión. Cuenta ÚNICAMENTE los pellets visibles en ESTA foto — no asumas un rango de cantidad, cuenta exactamente lo que ves aunque sean más o menos de los esperados.
 
 Todos son del mismo tamaño (${singleSize}mm). Devuelve small=0, large=0 y pon el total en medium.
 ${fewShotNote}
-REGLAS: ignora hilos, fondo, sombras. Si se tocan cuenta cada uno individualmente. Precisión crítica.
+REGLAS ABSOLUTAS:
+1. Cuenta ÚNICAMENTE los objetos descritos. Ignora hilos, cables, algodón, fondo, sombras.
+2. Divide mentalmente la imagen en una cuadrícula de filas y columnas, cuenta cada celda por separado y luego suma el total.
+3. Si los objetos se tocan o solapan, nunca los agrupes como uno solo — cuenta cada uno individualmente.
+4. Incluye objetos parcialmente visibles si se ve más del 50%.
+5. Esta cuenta verifica albaranes comerciales — la precisión es crítica económicamente.
+6. Sé honesto con tu propia incertidumbre: si los objetos están muy amontonados, solapados, mal iluminados o hay cualquier duda razonable sobre el conteo exacto, responde confidence "media" o "baja" en vez de "alta".
 
 RESPONDE EXCLUSIVAMENTE CON ESTE JSON, CERO texto adicional:
-{"small":0,"medium":0,"large":0,"total":0,"confidence":"alta","notes":null}`;
+{"small":0,"medium":0,"large":0,"total":0,"confidence":"alta","notes":null}
+
+Sustituye los 0 por los conteos reales. confidence: "alta" "media" o "baja". notes: string o null.`;
+
+  console.log('MULTIFOTO PROMPT:', prompt.slice(0, 200));
+  console.log('MULTIFOTO IMAGE SIZE:', entry.base64.length);
 
   /* FIX CRÍTICO v7.9.4: mismo reintento con prompt ultra-simple que
      runCountAI ya tenía para foto única — antes analyzeOneFoto solo
@@ -574,7 +658,7 @@ RESPONDE EXCLUSIVAMENTE CON ESTE JSON, CERO texto adicional:
     const res=await fetch('https://api.anthropic.com/v1/messages',{
       method:'POST',
       headers:{'Content-Type':'application/json','x-api-key':apiKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
-      body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:200,messages:[{role:'user',content:[
+      body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:300,messages:[{role:'user',content:[
         ...fewShot,
         {type:'image',source:{type:'base64',media_type:entry.mime,data:entry.base64}},
         {type:'text',text:promptText}
@@ -608,6 +692,18 @@ RESPONDE EXCLUSIVAMENTE CON ESTE JSON, CERO texto adicional:
 }
 
 window.confirmMultiTotal = function() {
+  console.log('confirmMultiTotal called');
+  /* v7.9.9: evita guardar dos veces en Historial si confirmMultiTotal()
+     se dispara más de una vez para el MISMO toque (ej. si el onclick
+     directo y la delegación en document llegaran a disparar ambos, o
+     un "ghost click" duplicado en Android). multiConfirmed se resetea
+     solo 600ms después — no de forma permanente — para no bloquear una
+     SEGUNDA confirmación legítima si el operario añade más fotos al
+     mismo lote y vuelve a pulsar Confirmar más tarde. También se
+     resetea en resetMulti() (activar/desactivar multifoto). */
+  if (multiConfirmed) return;
+  multiConfirmed = true;
+  setTimeout(() => { multiConfirmed = false; }, 600);
   const singleSize=qs('#singleSize').value;
   /* v7.9.6: confianza "alta" solo si el total confirmado coincide
      exactamente con la suma de lo que Claude reportó originalmente
@@ -716,6 +812,9 @@ RESPONDE EXCLUSIVAMENTE CON ESTE JSON. CERO palabras antes o después. CERO mark
 {"small":0,"medium":0,"large":0,"total":0,"confidence":"alta","notes":null}
 
 Sustituye los 0 por los conteos reales. confidence: "alta" "media" o "baja". notes: string o null.`;
+
+  console.log('SINGLE PROMPT:', prompt.slice(0, 200));
+  console.log('SINGLE IMAGE SIZE:', lastImageBase64.length);
 
   async function askClaude(promptText, includeFewShot) {
     const fewShot=(includeFewShot&&sizeMode==='single')?buildFewShotBlocks(singleSize):[];
