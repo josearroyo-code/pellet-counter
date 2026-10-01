@@ -1,6 +1,18 @@
 /* ══════════════════════════════════════════
-   Pellet Counter v7.9.9 — fix real de multifoto, logs de depuración
-   FIX REAL (con datos A/B del usuario): la MISMA foto daba 52/52 por
+   Pellet Counter v8.0 — sincronización entre dispositivos
+   NUEVO: Ajustes → "🔄 Sincronización entre dispositivos" —
+          exportAllData() descarga un JSON (historial, ejemplos,
+          pesos unitarios, perfiles/productos personalizados y el
+          estado de tamaño activo) con nombre
+          pellet-counter-backup-YYYY-MM-DD.json; importAllData() lee
+          ese JSON, muestra un resumen (nº análisis + ejemplos por
+          tamaño) y pide confirmación antes de sobrescribir, luego
+          recarga la página para que todo se re-renderice desde el
+          localStorage importado. La API key se excluye a propósito
+          del export — es una credencial por dispositivo, y el flujo
+          previsto (mandar el JSON por WhatsApp/email) la expondría
+          en texto plano si se incluyera. Ver SYNC_KEYS/SYNC_JSON_KEYS.
+   v7.9.9: FIX REAL (con datos A/B del usuario): la MISMA foto daba 52/52 por
           foto única y 62/52 (+10) por multifoto. Eso confirmó que el
           problema estaba en analyzeOneFoto(), no en los pellets ni
           el perfil. Causa real: el prompt de multifoto era menos
@@ -215,7 +227,7 @@
    Fix: JSON parser robusto
    ══════════════════════════════════════════ */
 
-const VERSION = 'v7.9.9';
+const VERSION = 'v8.0';
 
 /* ══ CAPTURA DE LOGS (v7.9.9) ══
    No hay DevTools a mano en un móvil real — esto guarda los últimos
@@ -1399,6 +1411,79 @@ function renderWeighCounts(){
   });
   el.innerHTML='⚖️ '+['4','8','12'].map(s=>`${s}mm:${counts[s]}`).join(' · ');
 }
+
+/* ══ SINCRONIZACIÓN ENTRE DISPOSITIVOS (v8.0) ══
+   Exporta/importa un JSON con todo el localStorage "de datos" de la
+   app, para pasar historial/ejemplos/pesos/perfiles entre dispositivos
+   (ej. móvil → tablet) sin backend. La API key se excluye a propósito
+   — es una credencial por dispositivo, no "datos", y el flujo previsto
+   (enviar el JSON por WhatsApp/email) la expondría en texto plano si
+   se incluyera. */
+const SYNC_KEYS = ['unitWeights','activeProfile','productDesc','sizeMode','singleSize','customProducts','activeProduct','referenceExamples','analysisHistory'];
+const SYNC_JSON_KEYS = ['unitWeights','customProducts','referenceExamples','analysisHistory'];
+
+window.exportAllData = function(){
+  const data = {};
+  SYNC_KEYS.forEach(k => {
+    const v = localStorage.getItem(k);
+    if (v !== null) data[k] = v;
+  });
+  const backup = { app:'Pellet Counter', version:VERSION, exportedAt:new Date().toISOString(), data };
+  const json = JSON.stringify(backup, null, 2);
+  const blob = new Blob([json], { type:'application/json' });
+  const url = URL.createObjectURL(blob);
+  const pad = n => String(n).padStart(2,'0');
+  const now = new Date();
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `pellet-counter-backup-${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}.json`;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  showToast('✓ Datos exportados');
+};
+
+window.importAllData = function(e){
+  const f = e.target.files[0]; if(!f) return;
+  const reader = new FileReader();
+  reader.onload = ev => {
+    let backup;
+    try { backup = JSON.parse(ev.target.result); }
+    catch(err) { showToast('Archivo JSON inválido', true); e.target.value=''; return; }
+    const data = backup && typeof backup === 'object' ? (backup.data || backup) : null;
+    if (!data || typeof data !== 'object') { showToast('El archivo no contiene datos reconocibles', true); e.target.value=''; return; }
+
+    let historyCount=0, ex4=0, ex8=0, ex12=0;
+    try { historyCount = JSON.parse(data.analysisHistory || '[]').length; } catch(err) {}
+    try {
+      const examples = JSON.parse(data.referenceExamples || '[]');
+      ex4 = examples.filter(x => x.size === '4').length;
+      ex8 = examples.filter(x => x.size === '8').length;
+      ex12 = examples.filter(x => x.size === '12').length;
+    } catch(err) {}
+    const summary = `Importados: ${historyCount} análisis, ${ex4} ejemplos 4mm, ${ex8} ejemplos 8mm, ${ex12} ejemplos 12mm`;
+    const ok = confirm(`${summary}\n\n¿Sobreescribir datos actuales? Esta acción no se puede deshacer.`);
+    if (!ok) { e.target.value=''; return; }
+
+    const skipped = [];
+    SYNC_KEYS.forEach(k => {
+      if (data[k] === undefined) return;
+      if (SYNC_JSON_KEYS.includes(k)) {
+        try { JSON.parse(data[k]); } catch(err) { skipped.push(k); return; }
+      }
+      localStorage.setItem(k, data[k]);
+    });
+    /* Un solo showToast: dos llamadas seguidas se pisarían (mismo
+       elemento #toast reusado) y el aviso de "skipped" nunca se vería
+       antes de la recarga de la página 800ms después. */
+    showToast(skipped.length
+      ? `✓ Importado con avisos — no se pudo leer: ${skipped.join(', ')}. Recargando…`
+      : '✓ Datos importados — recargando…', skipped.length>0);
+    e.target.value = '';
+    setTimeout(() => window.location.reload(), 800);
+  };
+  reader.onerror = () => showToast('No se pudo leer el archivo', true);
+  reader.readAsText(f);
+};
 
 /* ══ HISTORIAL ══ */
 function loadHistory(){return JSON.parse(localStorage.getItem('analysisHistory')||'[]');}
