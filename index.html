@@ -165,7 +165,7 @@
     <h1>Pellet Counter <span class="ai-badge">✦ Claude AI</span></h1>
     <div style="display:flex;align-items:center;gap:10px">
       <div id="analyzeSpinner" class="spinner"></div>
-      <span class="ver">v7.9.7</span>
+      <span class="ver">v7.9.8</span>
     </div>
   </div>
   <div class="subbar" id="exCounts" style="border-bottom:none;padding-bottom:2px"></div>
@@ -243,7 +243,9 @@
         <div class="status-bar" id="multiStatus" style="display:none"></div>
 
         <div class="tip" id="multiInstructions" style="margin-bottom:10px">
-          💡 Revisa cada foto y corrige si es necesario. Toca el número para editarlo directamente. Cuando todo esté correcto, pulsa "Confirmar total".
+          1. Añade todas las fotos del bote<br>
+          2. Corrige cada foto con [−] y [+] si es necesario<br>
+          3. Cuando el total sea correcto pulsa Confirmar
         </div>
         <div id="multiList"></div>
 
@@ -253,14 +255,16 @@
           <div class="m-sub">toca el número para editar directamente</div>
         </div>
 
-        <!-- Ajuste manual ±1 sobre el total acumulado -->
+        <!-- Ajuste final del total (independiente de la corrección por foto) -->
         <div class="manual-adj" id="multiManualAdj">
           <button class="adj-btn" onclick="adjustMultiTotalManual(-1)" style="background:var(--orange-dim);border-color:var(--orange);color:var(--orange)">−</button>
-          <div class="adj-label">Ajuste manual<br>±1</div>
+          <div class="adj-label">Ajuste final del total<br>(solo si es necesario)<br><span style="font-size:10px;color:var(--hint)">Usa primero la corrección por foto</span></div>
           <button class="adj-btn" onclick="adjustMultiTotalManual(+1)" style="background:var(--green-dim);border-color:var(--green);color:var(--green)">＋</button>
         </div>
 
-        <button id="btnMultiConfirm" class="btn-success" onclick="confirmMultiTotal()" style="display:none;width:100%;justify-content:center;padding:12px;font-size:14px">
+        <!-- FIX v7.9.8: sin onclick inline — se delega al click de document
+             en DOMContentLoaded, ver app.js -->
+        <button id="btnMultiConfirm" class="btn-success" style="display:none;width:100%;justify-content:center;padding:12px;font-size:14px">
           ✓ Confirmar total
         </button>
       </div>
@@ -337,7 +341,10 @@
     <!-- ══ PESAR ══ -->
     <div class="panel" id="panel-grav">
 
-      <p style="font-size:12px;color:var(--muted);margin-bottom:8px">📦 Peso del bote vacío: 47.86g</p>
+      <div style="background:var(--surface2);border:1px solid var(--blue);border-radius:var(--radius);padding:12px 16px;margin-bottom:12px;display:flex;align-items:center;gap:10px">
+        <span style="font-size:22px">📦</span>
+        <span style="font-size:16px;font-weight:700;color:var(--blue)">Bote vacío: 47.86 g</span>
+      </div>
       <p style="font-size:12px;color:var(--muted);margin-bottom:12px">⚖️ Pesos unitarios actuales: <span id="pesosInfoLine">—</span><br><span style="font-size:11px;color:var(--hint)">Editables solo por administrador en Ajustes → Pesos unitarios.</span></p>
 
       <!-- ══ PESADA RÁPIDA (principal) ══ -->
@@ -483,8 +490,14 @@
       <div class="card">
         <p class="card-label">Acerca de</p>
         <div style="font-size:12px;color:var(--muted);line-height:2.2">
-          <div><strong style="color:var(--text)">Pellet Counter v7.9.7</strong></div>
+          <div><strong style="color:var(--text)">Pellet Counter v7.9.8</strong></div>
           <div>Motor IA · Claude Sonnet Vision</div>
+          <div>Fix botón Confirmar total · delegación de eventos (no respondía)</div>
+          <div>Bote vacío · card destacada y siempre visible en Pesar</div>
+          <div>Prompt multifoto · aviso explícito contra condensadores/termistores</div>
+          <div>Instrucciones de multifoto más claras · 3 pasos numerados</div>
+          <div>Ajuste final del total · aclarado: usar primero corrección por foto</div>
+          <div>Historial multifoto · muestra qué foto se corrigió y cuánto</div>
           <div>Prompt 4mm · aviso anti-sobreconteo, conservador en caso de duda</div>
           <div>Adaptado a Surface Pro y tablets · dos columnas en landscape</div>
           <div>Áreas de toque ≥48px · controles más grandes para dedo/stylus</div>
@@ -541,13 +554,13 @@
   <button class="btn-primary" id="installBtn" style="flex-shrink:0">Instalar</button>
 </div>
 
-<!-- splash v7.9.7 -->
+<!-- splash v7.9.8 -->
 <div id="splash" style="position:fixed;inset:0;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:9999;transition:opacity 0.4s">
   <div style="font-size:44px;margin-bottom:14px">⬤</div>
   <div style="font-size:20px;font-weight:700;color:var(--text);letter-spacing:-0.5px">Pellet Counter</div>
   <div style="font-size:12px;color:var(--green);font-weight:600;margin-top:6px;display:flex;align-items:center;gap:8px">
     <span>✦ Claude AI</span><span style="color:var(--hint)">·</span>
-    <span style="font-family:monospace;color:var(--blue)">v7.9.7</span>
+    <span style="font-family:monospace;color:var(--blue)">v7.9.8</span>
   </div>
   <div style="margin-top:28px;width:60px;height:2px;background:var(--surface2);border-radius:2px;overflow:hidden">
     <div style="height:100%;background:linear-gradient(90deg,var(--blue),var(--green));border-radius:2px;animation:load 1.3s ease-out forwards"></div>

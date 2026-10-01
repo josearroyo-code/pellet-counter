@@ -1,6 +1,28 @@
 /* ══════════════════════════════════════════
-   Pellet Counter v7.9.7 — adaptado a Surface Pro/tablets, prompt 4mm
-   NUEVO: PELLET_PROFILES['4'] añade un aviso anti-sobreconteo —
+   Pellet Counter v7.9.8 — fixes de multifoto con datos reales (ronda 2)
+   FIX CRÍTICO: "✓ Confirmar total" no respondía en Android real. El
+          onclick inline en el HTML se sustituyó por delegación de
+          eventos en document (DOMContentLoaded) — pedido así
+          explícitamente, aunque #btnMultiConfirm nunca se recrea
+          dinámicamente (es markup estático); la delegación es de
+          todas formas más robusta y es lo que se pidió.
+   NUEVO: card destacada "📦 Bote vacío: 47.86 g" en tab Pesar —
+          siempre visible, sin colapsar, con borde azul.
+   NUEVO: tercer intento contra "condensadores cerámicos" en
+          multifoto — línea "IMPORTANTE" explícita al principio del
+          prompt de analyzeOneFoto(), antes del perfil, nombrando
+          los componentes concretos con los que se confunde.
+   NUEVO: texto instructivo de multifoto reescrito en 3 pasos
+          numerados más claros.
+   NUEVO: la etiqueta del ajuste global del total aclara que es
+          "solo si es necesario" y que primero hay que usar la
+          corrección por foto — para no confundirlo con el ±1 por
+          foto, que es el método principal.
+   NUEVO: el desglose por foto en Historial ahora guarda {ai,total}
+          por foto (no solo el total final), así se puede mostrar
+          qué fotos se corrigieron y cuánto, ej. "F1: 54→51 (-3)".
+          Compatible con entradas v7.9.6/v7.9.7 (solo número).
+   v7.9.7: NUEVO: PELLET_PROFILES['4'] añade un aviso anti-sobreconteo —
           ante la duda entre N y N+1, elegir el menor; ser
           conservador con zonas oscuras de pellets muy juntos.
    SIMPLIFICADO: la card "Referencia del bote" en tab Pesar perdió el
@@ -170,7 +192,7 @@
    Fix: JSON parser robusto
    ══════════════════════════════════════════ */
 
-const VERSION = 'v7.9.7';
+const VERSION = 'v7.9.8';
 let lastImageBase64 = null;
 let lastImageMime   = 'image/jpeg';
 let isAnalyzing     = false;
@@ -228,6 +250,16 @@ document.addEventListener('DOMContentLoaded', () => {
   if (btnActivateMultifoto) btnActivateMultifoto.addEventListener('click', () => {
     if (!multiMode) toggleMultiMode();
     qs('#overlapWarning').style.display = 'none';
+  });
+  /* FIX v7.9.8: "Confirmar total" (multifoto) no respondía en Android real.
+     Delegación de eventos en document en vez de onclick inline, por si el
+     listener directo se perdía al reemplazar #multiList con innerHTML en
+     cada foto añadida/corregida (el botón en sí nunca se recrea, pero la
+     delegación es robusta a eso igualmente y es la solución pedida). */
+  document.addEventListener('click', e => {
+    if (e.target.id === 'btnMultiConfirm' || e.target.closest('#btnMultiConfirm')) {
+      confirmMultiTotal();
+    }
   });
 });
 
@@ -513,7 +545,14 @@ async function analyzeOneFoto(entry) {
   const fewShotNote=fewShotCount>0
     ?`\nNOTA: antes de la foto a analizar se incluyen ${fewShotCount} imagen(es) de referencia con su conteo ya confirmado por texto. Son solo contexto de calibración — NO las cuentes. La imagen a contar es la ÚLTIMA, justo antes de este texto.\n`
     :'';
+  /* v7.9.8, tercer intento contra "condensadores cerámicos": v7.9.5 reforzó
+     PELLET_PROFILES, v7.9.6 congeló productDesc por lote — ninguno bastó.
+     Ahora se añade una línea "IMPORTANTE" explícita al PRINCIPIO del
+     prompt (antes del perfil), nombrando los componentes concretos con
+     los que Claude confunde los pellets. */
   const prompt=`Eres un sistema experto de conteo industrial de precisión máxima.
+
+IMPORTANTE: Estás contando electrodos de disco de plata sinterizada, NO condensadores cerámicos, NO termistores, NO varistores. Son discos metálicos con un hilo fino.
 
 OBJETO A CONTAR: ${productDesc}
 
@@ -596,7 +635,10 @@ window.confirmMultiTotal = function() {
     total:multiTotal,aiTotal:rawSum,size4:counts.c4,size8:counts.c8,size12:counts.c12,
     product:(qs('#productDesc').value||'').slice(0,60),confidence,
     notes:null,
-    photoBreakdown:multifotos.map(f=>f.result?.total||0),
+    /* v7.9.8: {ai,total} por foto (no solo el total final) para poder
+       mostrar en Historial qué fotos se corrigieron y cuánto, ej.
+       "F1: 54→51 (-3)". */
+    photoBreakdown:multifotos.map(f=>({ai:f.result?.aiTotal??f.result?.total??0,total:f.result?.total||0})),
     albaran:alb||null
     // ODOO - pendiente de implementar: odoo:buildOdooText()
   });
@@ -1325,10 +1367,21 @@ window.renderHistory=function(){
       ?`<span style="font-size:12px;font-weight:700;color:${cd.color};display:inline-flex;align-items:center;gap:3px;flex-shrink:0">${cd.icon} ${cd.label}</span>`
       :`<span style="font-size:12px;color:var(--muted);flex-shrink:0">—</span>`;
     /* v7.9.6: desglose por foto de las entradas de multifoto, más
-       visible que el antiguo "F1:49 F2:51" comprimido en notes. */
+       visible que el antiguo "F1:49 F2:51" comprimido en notes.
+       v7.9.8: cada foto pasó a guardar {ai,total} en vez de solo el
+       total final, para poder mostrar qué fotos se corrigieron y
+       cuánto (ej. "F1: 54→51 (-3)"). `typeof p==='number'` mantiene
+       compatibilidad con entradas guardadas en v7.9.6/v7.9.7, que
+       solo tenían el número final. */
     const photoBreakdownHtml=Array.isArray(e.photoBreakdown)&&e.photoBreakdown.length>0
-      ?`<div style="font-size:11px;color:var(--hint);margin-bottom:6px;line-height:1.9">
-          ${e.photoBreakdown.map((n,idx)=>`📷 Foto ${idx+1}: ${n} uds`).join('<br>')}
+      ?`<div style="font-size:11px;color:var(--hint);margin-bottom:6px;line-height:1.6">
+          📷 ${e.photoBreakdown.map((p,idx)=>{
+            const label=`F${idx+1}`;
+            if(typeof p==='number')return `${label}: ${p} uds`;
+            if(p.ai===p.total)return `${label}: ${p.total} uds`;
+            const diff=p.total-p.ai;
+            return `${label}: ${p.ai}→${p.total} (${diff>0?'+':''}${diff})`;
+          }).join(' · ')}
         </div>
         <div style="border-top:0.5px dashed var(--border);margin-bottom:6px"></div>`
       :'';
