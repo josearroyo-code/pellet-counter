@@ -1,6 +1,23 @@
 /* ══════════════════════════════════════════
-   Pellet Counter v8.0 — sincronización entre dispositivos
-   NUEVO: Ajustes → "🔄 Sincronización entre dispositivos" —
+   Pellet Counter v8.1 — cámara nativa en Windows/desktop/Surface
+   NUEVO: en Android/iOS (detectado por user-agent) todo sigue igual
+          — el <input capture="environment"> sigue abriendo la cámara
+          nativa del sistema, sin cambios. En cualquier otra
+          plataforma (Windows/desktop/Surface, donde ese atributo no
+          hace nada), la upload-zone se sustituye por dos botones:
+          "📁 Subir desde archivo" (selector de archivo normal, sin
+          capture) y "📷 Usar cámara" (getUserMedia con su propio
+          <video>/<canvas>, overlay a pantalla completa). Mismo flujo
+          en foto única y en multifoto — ambas comparten el modal de
+          cámara (`openCameraModal(modo)`) y la lógica de captura
+          (`processSinglePhotoDataUrl`/`addPhotoToMultifoto`, ambas
+          extraídas de loadCount()/addMultiFoto() para reutilizarse).
+          Si se deniega el permiso o el navegador no soporta cámara,
+          se avisa y se sugiere usar "Subir desde archivo". En
+          landscape ≥1024px el preview ocupa la columna izquierda
+          (mín. 400px alto) y los controles la derecha, igual que el
+          resto de layouts de dos columnas de la app desde v7.9.7.
+   v8.0: NUEVO: Ajustes → "🔄 Sincronización entre dispositivos" —
           exportAllData() descarga un JSON (historial, ejemplos,
           pesos unitarios, perfiles/productos personalizados y el
           estado de tamaño activo) con nombre
@@ -227,7 +244,7 @@
    Fix: JSON parser robusto
    ══════════════════════════════════════════ */
 
-const VERSION = 'v8.0';
+const VERSION = 'v8.1';
 
 /* ══ CAPTURA DE LOGS (v7.9.9) ══
    No hay DevTools a mano en un móvil real — esto guarda los últimos
@@ -297,6 +314,7 @@ document.addEventListener('DOMContentLoaded', () => {
   migrateP4Weight();
   restoreSettings(); initUnitWeights(); loadHistory(); updateHistoryBadge();
   renderProductSelector(); renderExampleCounts(); updateFewshotNotice(); renderWeighCounts();
+  applyPlatformUploadUI();
   selectQuickSize(quickSize);
   const ap = localStorage.getItem('activeProfile');
   if (ap) setTimeout(() => highlightProfile(ap), 100);
@@ -582,6 +600,13 @@ window.removeMultiFoto = function(i) {
   multifotos.splice(i,1); renderMultiList(); updateMultiTotal();
 };
 
+/* Compartido entre el selector de archivos y la cámara nativa (v8.1) */
+function addPhotoToMultifoto(blobUrl, base64, mime) {
+  const entry={base64,mime,blobUrl,result:null,analyzing:true};
+  multifotos.push(entry); renderMultiList(); updateMultiTotal();
+  analyzeOneFoto(entry);
+}
+
 window.addMultiFoto = function(e) {
   /* v7.9.6 FIX: se congela la descripción de producto UNA vez por lote,
      antes de programar ningún analyzeOneFoto — evita cualquier lectura
@@ -591,11 +616,7 @@ window.addMultiFoto = function(e) {
   Array.from(e.target.files).forEach(f => {
     const blobUrl=URL.createObjectURL(f);
     const reader=new FileReader();
-    reader.onload=ev=>{
-      const entry={base64:ev.target.result.split(',')[1],mime:f.type||'image/jpeg',blobUrl,result:null,analyzing:true};
-      multifotos.push(entry); renderMultiList(); updateMultiTotal();
-      analyzeOneFoto(entry);
-    };
+    reader.onload=ev=>addPhotoToMultifoto(blobUrl, ev.target.result.split(',')[1], f.type||'image/jpeg');
     reader.readAsDataURL(f);
   });
   e.target.value='';
@@ -758,25 +779,94 @@ window.confirmMultiTotal = function() {
 };
 
 /* ══ FOTO ÚNICA ══ */
+/* Compartido entre el selector de archivos y la cámara nativa (v8.1) */
+function processSinglePhotoDataUrl(dataUrl, mime) {
+  lastImageMime=mime;
+  const img=new Image();
+  img.onload=()=>{
+    const canvas=qs('#cvCount'),maxW=Math.min(window.innerWidth-28,800);
+    let w=img.naturalWidth,h=img.naturalHeight;
+    if(w>maxW){h=Math.round(h*maxW/w);w=maxW;}
+    canvas.width=w;canvas.height=h;canvas.getContext('2d').drawImage(img,0,0,w,h);
+    qs('#wrapCount').style.display='block';qs('#btnRecount').style.display='';
+    lastImageBase64=dataUrl.split(',')[1];
+    runCountAI();
+  };
+  img.src=dataUrl;
+}
+
 window.loadCount = function(e) {
   if(multiMode){window.addMultiFoto(e);return;}
   const f=e.target.files[0]; if(!f)return;
-  lastImageMime=f.type||'image/jpeg';
   const reader=new FileReader();
-  reader.onload=ev=>{
-    const img=new Image();
-    img.onload=()=>{
-      const canvas=qs('#cvCount'),maxW=Math.min(window.innerWidth-28,800);
-      let w=img.naturalWidth,h=img.naturalHeight;
-      if(w>maxW){h=Math.round(h*maxW/w);w=maxW;}
-      canvas.width=w;canvas.height=h;canvas.getContext('2d').drawImage(img,0,0,w,h);
-      qs('#wrapCount').style.display='block';qs('#btnRecount').style.display='';
-      lastImageBase64=ev.target.result.split(',')[1];
-      runCountAI();
-    };
-    img.src=ev.target.result;
-  };
+  reader.onload=ev=>processSinglePhotoDataUrl(ev.target.result, f.type||'image/jpeg');
   reader.readAsDataURL(f);
+};
+
+/* ══ CÁMARA NATIVA — Windows/desktop/Surface (v8.1) ══
+   En Android/iOS el <input capture="environment"> ya abre la cámara
+   nativa del sistema — eso no cambia. En desktop ese atributo no hace
+   nada (el navegador lo ignora y abre un selector de archivo normal),
+   así que ahí se sustituye la upload-zone por dos botones: "Subir
+   desde archivo" (input sin capture) y "Usar cámara" (getUserMedia +
+   <video>/<canvas> propios, dentro de la app). */
+const isMobilePlatform = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+let cameraStream = null;
+let cameraTargetMode = null; // 'single' | 'multi'
+
+function applyPlatformUploadUI() {
+  if (isMobilePlatform) return; // HTML ya trae el flujo móvil visible por defecto
+  const zm=qs('#uploadZoneMobile'); if(zm) zm.style.display='none';
+  const cd=qs('#uploadChoiceDesktop'); if(cd) cd.style.display='flex';
+  const zmm=qs('#uploadZoneMultiMobile'); if(zmm) zmm.style.display='none';
+  const cdm=qs('#uploadChoiceMultiDesktop'); if(cdm) cdm.style.display='flex';
+}
+
+window.openCameraModal = function(mode){
+  cameraTargetMode = mode;
+  const modal=qs('#cameraModal'), video=qs('#cameraVideo'), errEl=qs('#cameraError');
+  errEl.style.display='none'; errEl.textContent='';
+  modal.style.display='flex';
+  if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+    errEl.textContent='⚠️ Tu navegador no soporta acceso a la cámara — usa 📁 Subir desde archivo';
+    errEl.style.display='block';
+    return;
+  }
+  navigator.mediaDevices.getUserMedia({
+    video:{ facingMode:{ideal:'environment'}, width:{ideal:1920}, height:{ideal:1080} }
+  }).then(stream=>{
+    cameraStream=stream;
+    video.srcObject=stream;
+  }).catch(()=>{
+    errEl.textContent='⚠️ Permiso de cámara denegado — usa 📁 Subir desde archivo';
+    errEl.style.display='block';
+  });
+};
+
+window.closeCameraModal = function(){
+  if(cameraStream){cameraStream.getTracks().forEach(t=>t.stop());cameraStream=null;}
+  const video=qs('#cameraVideo'); if(video) video.srcObject=null;
+  const modal=qs('#cameraModal'); if(modal) modal.style.display='none';
+  cameraTargetMode=null;
+};
+
+window.captureCameraPhoto = function(){
+  const video=qs('#cameraVideo');
+  if(!video||!video.videoWidth) return; // stream aún no listo
+  const canvas=qs('#cameraCaptureCanvas');
+  canvas.width=video.videoWidth; canvas.height=video.videoHeight;
+  canvas.getContext('2d').drawImage(video,0,0);
+  const dataUrl=canvas.toDataURL('image/jpeg',0.92);
+  const mode=cameraTargetMode;
+  closeCameraModal();
+  if(mode==='single'){
+    processSinglePhotoDataUrl(dataUrl,'image/jpeg');
+  } else if(mode==='multi'){
+    window._currentProductDesc=qs('#productDesc').value.trim()||PELLET_PROFILES['8'];
+    fetch(dataUrl).then(r=>r.blob()).then(blob=>{
+      addPhotoToMultifoto(URL.createObjectURL(blob), dataUrl.split(',')[1], 'image/jpeg');
+    });
+  }
 };
 
 window.rerun=window.runCount=runCountAI;
