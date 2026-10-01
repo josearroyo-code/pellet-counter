@@ -1,5 +1,16 @@
 /* ══════════════════════════════════════════
    Pellet Counter v8.1 — cámara nativa en Windows/desktop/Surface
+   PATCH CÁMARA: botón "🔄 Cambiar cámara" (`switchCamera`) — tras
+          conceder el permiso se enumeran las cámaras disponibles
+          (enumerateDevices) y, si hay más de una, el botón aparece
+          para alternar entre ellas por deviceId. facingMode:
+          {ideal:'environment'} ya pedía la trasera con fallback
+          automático a cualquier otra cámara disponible — eso no era
+          nuevo de este patch, ya estaba así en la primera versión de
+          v8.1 (constraint "ideal", no "exact": el navegador no falla
+          si no hay trasera, usa la que haya). VERSION se mantiene en
+          'v8.1' (no se muestra un número nuevo) — solo se bumpea
+          CACHE en sw.js, mismo patrón que v7.5.1/v7.6.1/v7.8.1.
    NUEVO: en Android/iOS (detectado por user-agent) todo sigue igual
           — el <input capture="environment"> sigue abriendo la cámara
           nativa del sistema, sin cambios. En cualquier otra
@@ -803,16 +814,25 @@ window.loadCount = function(e) {
   reader.readAsDataURL(f);
 };
 
-/* ══ CÁMARA NATIVA — Windows/desktop/Surface (v8.1) ══
+/* ══ CÁMARA NATIVA — Windows/desktop/Surface (v8.1, patch cámara v8.1.1) ══
    En Android/iOS el <input capture="environment"> ya abre la cámara
    nativa del sistema — eso no cambia. En desktop ese atributo no hace
    nada (el navegador lo ignora y abre un selector de archivo normal),
    así que ahí se sustituye la upload-zone por dos botones: "Subir
    desde archivo" (input sin capture) y "Usar cámara" (getUserMedia +
-   <video>/<canvas> propios, dentro de la app). */
+   <video>/<canvas> propios, dentro de la app).
+   facingMode:{ideal:'environment'} (no "exact") ya pedía la trasera
+   con fallback automático a cualquier otra cámara si no hay trasera
+   — eso ya estaba así desde v8.1, confirmado al revisar este patch.
+   Lo nuevo es el botón "🔄 Cambiar cámara": una vez concedido el
+   permiso, se enumeran las cámaras disponibles (los labels solo son
+   fiables DESPUÉS de tener permiso) y, si hay más de una, el botón
+   aparece para ir alternando entre ellas por deviceId. */
 const isMobilePlatform = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 let cameraStream = null;
 let cameraTargetMode = null; // 'single' | 'multi'
+let cameraDevices = [];
+let cameraDeviceIndex = 0;
 
 function applyPlatformUploadUI() {
   if (isMobilePlatform) return; // HTML ya trae el flujo móvil visible por defecto
@@ -822,32 +842,57 @@ function applyPlatformUploadUI() {
   const cdm=qs('#uploadChoiceMultiDesktop'); if(cdm) cdm.style.display='flex';
 }
 
+function startCameraStream(videoConstraints){
+  const video=qs('#cameraVideo'), errEl=qs('#cameraError'), btnSwitch=qs('#btnSwitchCamera');
+  if(cameraStream){cameraStream.getTracks().forEach(t=>t.stop());cameraStream=null;}
+  navigator.mediaDevices.getUserMedia({
+    video: Object.assign({ width:{ideal:1920}, height:{ideal:1080} }, videoConstraints)
+  }).then(async stream=>{
+    cameraStream=stream;
+    video.srcObject=stream;
+    errEl.style.display='none';
+    /* Los deviceId/label de enumerateDevices() solo vienen completos
+       una vez concedido el permiso — por eso se enumera aquí y no antes. */
+    try {
+      const devices=await navigator.mediaDevices.enumerateDevices();
+      cameraDevices=devices.filter(d=>d.kind==='videoinput');
+    } catch(err) { cameraDevices=[]; }
+    if(btnSwitch) btnSwitch.style.display = cameraDevices.length>1 ? 'inline-flex' : 'none';
+  }).catch(()=>{
+    errEl.textContent='⚠️ Permiso de cámara denegado — usa 📁 Subir desde archivo';
+    errEl.style.display='block';
+  });
+}
+
 window.openCameraModal = function(mode){
   cameraTargetMode = mode;
-  const modal=qs('#cameraModal'), video=qs('#cameraVideo'), errEl=qs('#cameraError');
+  cameraDevices=[]; cameraDeviceIndex=0;
+  const modal=qs('#cameraModal'), errEl=qs('#cameraError'), btnSwitch=qs('#btnSwitchCamera');
   errEl.style.display='none'; errEl.textContent='';
+  if(btnSwitch) btnSwitch.style.display='none';
   modal.style.display='flex';
   if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
     errEl.textContent='⚠️ Tu navegador no soporta acceso a la cámara — usa 📁 Subir desde archivo';
     errEl.style.display='block';
     return;
   }
-  navigator.mediaDevices.getUserMedia({
-    video:{ facingMode:{ideal:'environment'}, width:{ideal:1920}, height:{ideal:1080} }
-  }).then(stream=>{
-    cameraStream=stream;
-    video.srcObject=stream;
-  }).catch(()=>{
-    errEl.textContent='⚠️ Permiso de cámara denegado — usa 📁 Subir desde archivo';
-    errEl.style.display='block';
-  });
+  startCameraStream({ facingMode:{ideal:'environment'} });
+};
+
+/* Alterna a la siguiente cámara disponible (deviceId), reiniciando el
+   stream — ej. para pasar de la trasera a la frontal en un Surface
+   con varias cámaras. */
+window.switchCamera = function(){
+  if(cameraDevices.length<2) return;
+  cameraDeviceIndex=(cameraDeviceIndex+1)%cameraDevices.length;
+  startCameraStream({ deviceId:{exact:cameraDevices[cameraDeviceIndex].deviceId} });
 };
 
 window.closeCameraModal = function(){
   if(cameraStream){cameraStream.getTracks().forEach(t=>t.stop());cameraStream=null;}
   const video=qs('#cameraVideo'); if(video) video.srcObject=null;
   const modal=qs('#cameraModal'); if(modal) modal.style.display='none';
-  cameraTargetMode=null;
+  cameraTargetMode=null; cameraDevices=[]; cameraDeviceIndex=0;
 };
 
 window.captureCameraPhoto = function(){
