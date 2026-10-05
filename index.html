@@ -173,7 +173,7 @@
     <h1>Pellet Counter <span class="ai-badge">✦ Claude AI</span></h1>
     <div style="display:flex;align-items:center;gap:10px">
       <div id="analyzeSpinner" class="spinner"></div>
-      <span class="ver">v8.2</span>
+      <span class="ver">v8.3</span>
     </div>
   </div>
   <div class="subbar" id="exCounts" style="border-bottom:none;padding-bottom:2px"></div>
@@ -552,8 +552,12 @@
       <div class="card">
         <p class="card-label">Acerca de</p>
         <div style="font-size:12px;color:var(--muted);line-height:2.2">
-          <div><strong style="color:var(--text)">Pellet Counter v8.2</strong></div>
+          <div><strong style="color:var(--text)">Pellet Counter v8.3</strong></div>
           <div>Motor IA · Claude Sonnet Vision</div>
+          <div>Cámara en 4K · resolución ideal 3840×2160 (con fallback) y la real visible en el modal y en el log</div>
+          <div>Multifoto · máximo recomendado 4mm 30 · 8mm 40 · 12mm 30, con alerta de densidad alta por foto</div>
+          <div>Historial multifoto · badge "📷 Multifoto (N fotos)" y desglose por foto visible</div>
+          <div>Confianza "no disponible" en vez de "undefined" cuando Claude no la devuelve</div>
           <div>Popup de tamaño antes de cada foto · "¿Qué pellet vas a contar?"</div>
           <div>Aviso de tamaño incorrecto · size_match, con "Repetir con Xmm" sin guardar el error</div>
           <div>Historial · 🗑 borrar entradas individuales, y 🧹 eliminar duplicados</div>
@@ -649,6 +653,8 @@
     </div>
     <div id="cameraRight" style="width:100%;max-width:360px;display:flex;flex-direction:column;gap:12px">
       <div id="cameraError" class="warn" style="display:none;text-align:center;margin-bottom:0"></div>
+      <!-- v8.3: resolución REAL que entrega la cámara (también en el log de Ajustes) -->
+      <div id="cameraResInfo" style="font-size:12px;color:var(--muted);text-align:center"></div>
       <!-- Solo visible si hay más de una cámara disponible (v8.1 patch) -->
       <button id="btnSwitchCamera" onclick="switchCamera()" style="display:none;width:100%;justify-content:center">🔄 Cambiar cámara</button>
       <div style="display:flex;gap:12px">
@@ -660,13 +666,13 @@
   <canvas id="cameraCaptureCanvas" style="display:none"></canvas>
 </div>
 
-<!-- splash v8.2 -->
+<!-- splash v8.3 -->
 <div id="splash" style="position:fixed;inset:0;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:9999;transition:opacity 0.4s">
   <div style="font-size:44px;margin-bottom:14px">⬤</div>
   <div style="font-size:20px;font-weight:700;color:var(--text);letter-spacing:-0.5px">Pellet Counter</div>
   <div style="font-size:12px;color:var(--green);font-weight:600;margin-top:6px;display:flex;align-items:center;gap:8px">
     <span>✦ Claude AI</span><span style="color:var(--hint)">·</span>
-    <span style="font-family:monospace;color:var(--blue)">v8.2</span>
+    <span style="font-family:monospace;color:var(--blue)">v8.3</span>
   </div>
   <div style="margin-top:28px;width:60px;height:2px;background:var(--surface2);border-radius:2px;overflow:hidden">
     <div style="height:100%;background:linear-gradient(90deg,var(--blue),var(--green));border-radius:2px;animation:load 1.3s ease-out forwards"></div>

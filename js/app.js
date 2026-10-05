@@ -1,5 +1,34 @@
 /* ══════════════════════════════════════════
-   Pellet Counter v8.2 — mejoras de tests reales en Surface Pro
+   Pellet Counter v8.3 — diagnóstico de cámara y ajustes de multifoto
+   (dispositivo de prueba: Surface Pro 9 5G, siempre vía getUserMedia)
+   1 CÁMARA: antes se pedía 1920×1080 ideal (Full HD) aunque la cámara
+          soporte más. Ahora CAMERA_IDEAL_SIZE = 3840×2160 ideal (con
+          "ideal" nunca falla: una cámara menor da su máximo) y, si el
+          modo elegido queda >10% por debajo del máximo declarado en
+          getCapabilities(), se intenta applyConstraints al máximo.
+          La resolución REAL (track.getSettings()) se loguea al iniciar
+          y en cada captura (+ tamaño del JPEG), y se muestra en el modal.
+          La captura baja la calidad JPEG hasta caber en ~4.8M caracteres
+          base64 (la API limita ~5 MB por imagen). El catch ya no
+          presenta cualquier error como "permiso denegado".
+          OJO al interpretar resultados: la API de Anthropic puede
+          reducir imágenes muy grandes por su cuenta, así que 4K no
+          garantiza mejor conteo — por eso se loguea lo que se usa.
+   2 MULTIFOTO: límite recomendado 12mm 15→30 (a 43 uds el error ya era
+          -5 en los 6 tests reales; 30 y no 35). Tabla única
+          MULTI_MAX_PER_PHOTO {4:30, 8:40, 12:30} para el consejo y la
+          alerta (el consejo de 8mm decía 25 → ahora 40, coherente con
+          el umbral de alerta pedido).
+   3 CONFIANZA "undefined": el reintento simple pide solo {"total":0} sin
+          confidence y la ruta de foto única no tenía fallback. Ahora se
+          normaliza a alta/media/baja o null → "no disponible" (estado,
+          overlay, historial "Confianza n/d") + aviso de revisar la foto.
+   4 HISTORIAL MULTIFOTO: badge "📷 Multifoto (N fotos)", borde azul en la
+          tarjeta y desglose en chips (naranja los corregidos). Detecta
+          también entradas antiguas por el texto de notes.
+   5 DENSIDAD ALTA: aviso por foto (y toast) si el conteo original de
+          Claude supera el límite recomendado del tamaño de esa foto.
+   v8.2: mejoras de tests reales en Surface Pro
    REGLA DE VERSIONADO (pedida por el usuario en v8.2): cualquier cambio
           que afecte a funcionalidad visible actualiza VERSION y se ve
           en splash + topbar (+ CACHE en sw.js). Solo CSS menor o fixes
@@ -302,7 +331,7 @@
    Fix: JSON parser robusto
    ══════════════════════════════════════════ */
 
-const VERSION = 'v8.2';
+const VERSION = 'v8.3';
 
 /* ══ CAPTURA DE LOGS (v7.9.9) ══
    No hay DevTools a mano en un móvil real — esto guarda los últimos
@@ -571,11 +600,28 @@ window.toggleMultiMode = function() {
 };
 
 /* ══ CONSEJO POR TAMAÑO EN MULTIFOTO ══ */
-const MULTI_SIZE_TIPS={'4':'Máximo 30 por foto','8':'Máximo 25 por foto','12':'Máximo 15 por foto — son grandes'};
+/* v8.3: UNA sola tabla para el consejo y para la alerta de densidad (antes
+   eran dos textos independientes y podían contradecirse).
+   - 12mm: 15 → 30. Con 6 tests reales, a 43 uds el error ya era -5 (más de
+     lo esperable cerca del límite anterior de 35), por eso 30 y no 35.
+     Revisable al alza si la mayor resolución de cámara (v8.3) mejora los
+     resultados.
+   - 8mm: el consejo decía 25 pero el umbral de alerta pedido es 40; se
+     unifica en 40. */
+const MULTI_MAX_PER_PHOTO={'4':30,'8':40,'12':30};
 function updateMultiSizeTip(){
   const el=qs('#multiSizeTip'); if(!el) return;
   const size=qs('#singleSize')?.value;
-  el.textContent=MULTI_SIZE_TIPS[size]?`💡 ${size}mm: ${MULTI_SIZE_TIPS[size]}`:'';
+  el.textContent=MULTI_MAX_PER_PHOTO[size]?`💡 ${size}mm: Máximo ${MULTI_MAX_PER_PHOTO[size]} por foto`:'';
+}
+/* Devuelve el límite recomendado si el resultado de esa foto lo supera
+   (usa el conteo original de Claude, no el corregido a mano: la densidad
+   de la foto es la misma aunque luego se ajuste), o null. */
+function multiPhotoOverLimit(result){
+  if(!result) return null;
+  const size=result.sizeDeclared||qs('#singleSize')?.value;
+  const lim=MULTI_MAX_PER_PHOTO[size];
+  return lim&&(result.aiTotal??result.total)>lim?{lim,size}:null;
 }
 
 /* v7.9.6: revoca las blob URLs de las miniaturas antes de descartarlas,
@@ -606,6 +652,7 @@ function renderMultiList() {
           `:`<span style="font-size:14px;font-weight:700;color:var(--muted)">${f.analyzing?'⏳ Analizando…':'⏸ En cola'}</span>`}
         </div>
         <div style="font-size:11px;color:var(--hint);margin-top:2px">Foto ${i+1}${f.result?' · Confianza '+f.result.confidence:''}</div>
+        ${(()=>{const o=multiPhotoOverLimit(f.result);return o?`<div style="font-size:11px;color:var(--orange);font-weight:700">⚠️ Densidad alta: ${f.result.aiTotal??f.result.total} uds (recomendado ≤${o.lim} para ${o.size}mm) — el conteo pierde precisión; mejor repartir en más fotos</div>`:'';})()}
         ${f.result?.sizeWarn?`<div style="font-size:11px;color:var(--red);font-weight:700">⚠️ Parece ${f.result.sizeWarn}, no ${f.result.sizeDeclared}mm</div>`:''}
         ${f.result?.notes?`<div style="font-size:10px;color:var(--hint);font-style:italic">${f.result.notes}</div>`:''}
       </div>
@@ -812,6 +859,8 @@ size_match / size_detected: Compara el tamaño visual de los discos con el tama�
       if(['4mm','8mm','12mm'].includes(det)&&det!==singleSize+'mm')sizeWarn=det;
     }
     entry.result={total,aiTotal:total,confidence:r.confidence||'media',notes:r.notes,sizeWarn,sizeDeclared:singleSize};
+    const over=multiPhotoOverLimit(entry.result);
+    if(over)showToast(`⚠️ Una foto tiene ${total} uds: supera el máximo recomendado (${over.lim}) para ${over.size}mm`,true);
   } catch(err) {
     entry.result={total:0,aiTotal:0,confidence:'baja',notes:'Error: '+err.message};
   } finally {
@@ -995,15 +1044,56 @@ function applyPlatformUploadUI() {
   const cdm=qs('#uploadChoiceMultiDesktop'); if(cdm) cdm.style.display='flex';
 }
 
+/* v8.3: antes se pedía width/height ideal 1920×1080 — es decir, la cámara
+   se limitaba a Full HD aunque soporte más (la trasera del Surface Pro 9
+   5G es de 10 MP). Con constraints "ideal" el navegador elige el modo más
+   cercano a lo pedido y nunca falla por no tenerlo, así que pedir 4K es
+   seguro: una cámara de menos resolución simplemente da su máximo. */
+const CAMERA_IDEAL_SIZE = { width:{ideal:3840}, height:{ideal:2160} };
+/* La API de Anthropic limita el tamaño por imagen (~5 MB); un frame 4K en
+   JPEG q0.92 puede acercarse. Se baja la calidad hasta que quepa. */
+const MAX_CAPTURE_CHARS = 4800000;
+
+/* Loguea (y devuelve) la resolución REAL que está entregando la cámara,
+   no la pedida — es lo que permite comprobar en el Ajustes → 🔍 log qué
+   se está usando de verdad en el dispositivo. */
+function logCameraSettings(stream, when){
+  const track=stream.getVideoTracks()[0]; if(!track) return null;
+  const s=track.getSettings?track.getSettings():{};
+  let caps=null; try{ caps=track.getCapabilities?track.getCapabilities():null; }catch(err){}
+  console.log(`CÁMARA (${when}) "${track.label}" getSettings:`, JSON.stringify({width:s.width,height:s.height,frameRate:s.frameRate,facingMode:s.facingMode}));
+  if(caps) console.log('CÁMARA capabilities (máx.):', JSON.stringify({width:caps.width&&caps.width.max,height:caps.height&&caps.height.max}));
+  return {track,settings:s,caps};
+}
+
+function updateCameraResInfo(){
+  const el=qs('#cameraResInfo'), video=qs('#cameraVideo'); if(!el||!video) return;
+  const track=cameraStream&&cameraStream.getVideoTracks()[0];
+  const s=track&&track.getSettings?track.getSettings():{};
+  const w=video.videoWidth||s.width, h=video.videoHeight||s.height;
+  el.textContent = w&&h ? `Resolución de la cámara: ${w}×${h}` : '';
+}
+
 function startCameraStream(videoConstraints){
   const video=qs('#cameraVideo'), errEl=qs('#cameraError'), btnSwitch=qs('#btnSwitchCamera');
   if(cameraStream){cameraStream.getTracks().forEach(t=>t.stop());cameraStream=null;}
   navigator.mediaDevices.getUserMedia({
-    video: Object.assign({ width:{ideal:1920}, height:{ideal:1080} }, videoConstraints)
+    video: Object.assign({}, CAMERA_IDEAL_SIZE, videoConstraints)
   }).then(async stream=>{
     cameraStream=stream;
     video.srcObject=stream;
+    video.onloadedmetadata=updateCameraResInfo; video.onresize=updateCameraResInfo;
     errEl.style.display='none';
+    const info=logCameraSettings(stream,'inicio');
+    /* "o el máximo que soporte la cámara": si el modo elegido queda claramente
+       por debajo del máximo que declara la cámara, se intenta subir a ese máximo. */
+    if(info&&info.caps&&info.caps.width&&info.caps.height&&info.settings.width&&info.caps.width.max>info.settings.width*1.1){
+      try{
+        await info.track.applyConstraints({width:{ideal:info.caps.width.max},height:{ideal:info.caps.height.max}});
+        logCameraSettings(stream,'tras subir al máximo');
+      }catch(err){ console.log('applyConstraints al máximo falló:', err&&err.name); }
+    }
+    updateCameraResInfo();
     /* Los deviceId/label de enumerateDevices() solo vienen completos
        una vez concedido el permiso — por eso se enumera aquí y no antes. */
     try {
@@ -1011,8 +1101,16 @@ function startCameraStream(videoConstraints){
       cameraDevices=devices.filter(d=>d.kind==='videoinput');
     } catch(err) { cameraDevices=[]; }
     if(btnSwitch) btnSwitch.style.display = cameraDevices.length>1 ? 'inline-flex' : 'none';
-  }).catch(()=>{
-    errEl.textContent='⚠️ Permiso de cámara denegado — usa 📁 Subir desde archivo';
+  }).catch(err=>{
+    /* v8.3: antes TODO error se mostraba como "permiso denegado", lo que
+       despistaba al diagnosticar (cámara ocupada, sin cámara…). */
+    const n=err&&err.name;
+    console.error('getUserMedia falló:', n, err&&err.message);
+    errEl.textContent =
+      (n==='NotAllowedError'||n==='SecurityError') ? '⚠️ Permiso de cámara denegado — usa 📁 Subir desde archivo' :
+      n==='NotFoundError' ? '⚠️ No se encontró ninguna cámara — usa 📁 Subir desde archivo' :
+      n==='NotReadableError' ? '⚠️ La cámara está en uso por otra aplicación — ciérrala o usa 📁 Subir desde archivo' :
+      `⚠️ No se pudo iniciar la cámara (${n||'error'}) — usa 📁 Subir desde archivo`;
     errEl.style.display='block';
   });
 }
@@ -1054,7 +1152,9 @@ window.captureCameraPhoto = function(){
   const canvas=qs('#cameraCaptureCanvas');
   canvas.width=video.videoWidth; canvas.height=video.videoHeight;
   canvas.getContext('2d').drawImage(video,0,0);
-  const dataUrl=canvas.toDataURL('image/jpeg',0.92);
+  let q=0.92, dataUrl=canvas.toDataURL('image/jpeg',q);
+  while(dataUrl.length>MAX_CAPTURE_CHARS&&q>0.5){ q-=0.1; dataUrl=canvas.toDataURL('image/jpeg',q); }
+  console.log(`CAPTURA: frame ${canvas.width}×${canvas.height}, JPEG q=${q.toFixed(2)}, base64=${dataUrl.length} car. (~${(dataUrl.length*0.75/1048576).toFixed(2)} MB)`);
   const mode=cameraTargetMode;
   closeCameraModal();
   if(mode==='single'){
@@ -1178,25 +1278,33 @@ size_match / size_detected: ${sizeCheckInstruction}`;
 
     renderAlbaranStatus(total,albaranQty);
 
-    const confColor=result.confidence==='alta'?'#3ecf8e':result.confidence==='media'?'#f59e0b':'#f97316';
-    setStatus('statusCount',`✓ ${total} detectados · Confianza: ${result.confidence}${result.notes?' · '+result.notes:''}`);
+    /* v8.3: "Confianza: undefined". El reintento con prompt ultra-simple
+       (cuando la 1ª respuesta no trae JSON) solo pide {"total":0} — sin
+       confidence — y esta ruta no tenía fallback (multifoto sí: ||'media').
+       Se normaliza: si no es alta/media/baja se trata como "no disponible",
+       se muestra así y se avisa de revisar la foto (no se aparenta "alta"). */
+    const confidence=['alta','media','baja'].includes(result.confidence)?result.confidence:null;
+    if(!confidence)console.log('Respuesta SIN confidence válida (¿vino del reintento simple?):',JSON.stringify(result));
+    const confLabel=confidence||'no disponible';
+    const confColor=confidence==='alta'?'#3ecf8e':confidence==='baja'?'#f97316':'#f59e0b';
+    setStatus('statusCount',`✓ ${total} detectados · Confianza: ${confLabel}${result.notes?' · '+result.notes:''}`);
     qs('#statusCount').style.color=confColor;
 
     const confWarnEl=qs('#confWarning');
-    if(result.confidence==='media'||result.confidence==='baja'){
+    if(confidence!=='alta'){
       confWarnEl.style.display='block';
       confWarnEl.style.color=confColor;
-      confWarnEl.textContent=`⚠️ Confianza ${result.confidence} — revisa la foto y usa ±1 si necesitas ajustar`;
+      confWarnEl.textContent=`⚠️ Confianza ${confLabel} — revisa la foto y usa ±1 si necesitas ajustar`;
     } else {
       confWarnEl.style.display='none';
     }
-    lastConfidence=result.confidence;
+    lastConfidence=confidence;
     /* v8.2: la alerta de solapamiento sale SOLO del campo booleano
        "overlap" del JSON (antes se buscaban palabras clave en las notas y
        una nota tipo "no hay solapamiento" disparaba un falso positivo). */
     checkOverlapNotice(result.overlap);
 
-    drawOverlay(total,result.confidence);
+    drawOverlay(total,confidence);
     qs('#resultsCount').style.display='block';qs('#manualAdj').style.display='flex';qs('#btnSaveExample').style.display='flex';qs('#btnZones').style.display='';
 
     /* v8.2: ¿el tamaño visual no coincide con el declarado? Solo se
@@ -1211,7 +1319,7 @@ size_match / size_detected: ${sizeCheckInstruction}`;
       date:new Date().toLocaleDateString('es-ES')+' '+new Date().toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'}),
       total,aiTotal:total,size4:counts.c4,size8:counts.c8,size12:counts.c12,
       product:(qs('#productDesc').value||'').slice(0,60),
-      confidence:result.confidence,notes:result.notes,albaran:albaranQty||null
+      confidence,notes:result.notes,albaran:albaranQty||null
       // ODOO - pendiente de implementar: odoo:buildOdooText()
     };
     if(mismatchSize){
@@ -1233,11 +1341,11 @@ size_match / size_detected: ${sizeCheckInstruction}`;
 
 function drawOverlay(total,confidence){
   const canvas=qs('#cvCount'),ctx=canvas.getContext('2d');
-  const col=confidence==='alta'?'#3ecf8e':confidence==='media'?'#f59e0b':'#f97316';
+  const col=confidence==='alta'?'#3ecf8e':confidence==='baja'?'#f97316':'#f59e0b';
   ctx.fillStyle='rgba(0,0,0,0.7)';ctx.beginPath();
   if(ctx.roundRect)ctx.roundRect(10,10,175,58,10);else ctx.rect(10,10,175,58);
   ctx.fill();ctx.fillStyle='#fff';ctx.font='bold 26px -apple-system,sans-serif';ctx.fillText(`${total} uds`,20,44);
-  ctx.fillStyle=col;ctx.font='12px -apple-system,sans-serif';ctx.fillText(`Confianza ${confidence}`,20,60);
+  ctx.fillStyle=col;ctx.font='12px -apple-system,sans-serif';ctx.fillText(`Confianza ${confidence||'no disponible'}`,20,60);
 }
 
 /* ══ ALERTA DE SOLAPAMIENTO (v8.2: campo booleano `overlap` del JSON) ══ */
@@ -2028,7 +2136,7 @@ window.renderHistory=function(){
       ?`<span style="font-size:11px;color:var(--muted);flex-shrink:0;font-family:'SF Mono','Fira Code',monospace">${e.netWeight?.toFixed(3)}g ÷ ${e.unitWeight?.toFixed(3)}g/ud</span>`
       :cd
       ?`<span style="font-size:12px;font-weight:700;color:${cd.color};display:inline-flex;align-items:center;gap:3px;flex-shrink:0">${cd.icon} ${cd.label}</span>`
-      :`<span style="font-size:12px;color:var(--muted);flex-shrink:0">—</span>`;
+      :`<span title="El análisis no devolvió nivel de confianza" style="font-size:12px;color:var(--muted);flex-shrink:0">Confianza n/d</span>`;
     /* v7.9.6: desglose por foto de las entradas de multifoto, más
        visible que el antiguo "F1:49 F2:51" comprimido en notes.
        v7.9.8: cada foto pasó a guardar {ai,total} en vez de solo el
@@ -2036,19 +2144,29 @@ window.renderHistory=function(){
        cuánto (ej. "F1: 54→51 (-3)"). `typeof p==='number'` mantiene
        compatibilidad con entradas guardadas en v7.9.6/v7.9.7, que
        solo tenían el número final. */
-    const photoBreakdownHtml=Array.isArray(e.photoBreakdown)&&e.photoBreakdown.length>0
-      ?`<div style="font-size:11px;color:var(--hint);margin-bottom:6px;line-height:1.6">
-          📷 ${e.photoBreakdown.map((p,idx)=>{
-            const label=`F${idx+1}`;
-            if(typeof p==='number')return `${label}: ${p} uds`;
-            if(p.ai===p.total)return `${label}: ${p.total} uds`;
-            const diff=p.total-p.ai;
-            return `${label}: ${p.ai}→${p.total} (${diff>0?'+':''}${diff})`;
-          }).join(' · ')}
-        </div>
-        <div style="border-top:0.5px dashed var(--border);margin-bottom:6px"></div>`
+    /* v8.3: las entradas de multifoto no se distinguían a simple vista (el
+       desglose era una línea pequeña en gris). Ahora: badge "📷 Multifoto
+       (N fotos)", borde izquierdo azul en la tarjeta y el desglose en
+       "chips" legibles — los de fotos corregidas, en naranja. */
+    const photoCount=getMultiPhotoCount(e);
+    const isMulti=photoCount>0;
+    const multiBadge=isMulti
+      ?`<span style="font-size:11px;font-weight:700;color:var(--blue);border:1px solid var(--blue);padding:2px 9px;border-radius:10px">📷 Multifoto (${photoCount} fotos)</span>`
       :'';
-    return `<div style="background:var(--surface);border:0.5px solid var(--border);border-radius:var(--radius);padding:12px;margin-bottom:10px">
+    const chip=(text,corrected)=>`<span style="display:inline-block;font-size:12px;font-weight:600;padding:3px 8px;border-radius:8px;background:var(--surface2);border:0.5px solid ${corrected?'var(--orange)':'var(--border2)'};color:${corrected?'var(--orange)':'var(--text)'};margin:0 6px 6px 0">📷 ${text}</span>`;
+    const photoBreakdownHtml=Array.isArray(e.photoBreakdown)&&e.photoBreakdown.length>0
+      ?`<div style="margin-bottom:4px">
+          <div style="font-size:11px;color:var(--muted);margin-bottom:4px">Desglose por foto:</div>
+          ${e.photoBreakdown.map((p,idx)=>{
+            const label=`F${idx+1}`;
+            if(typeof p==='number')return chip(`${label}: ${p} uds`,false);   /* entradas de v7.9.6/7: solo el total final */
+            if(p.ai===p.total)return chip(`${label}: ${p.total} uds`,false);
+            const diff=p.total-p.ai;
+            return chip(`${label}: ${p.ai}→${p.total} (${diff>0?'+':''}${diff})`,true);
+          }).join('')}
+        </div>`
+      :'';
+    return `<div style="background:var(--surface);border:0.5px solid var(--border);${isMulti?'border-left:3px solid var(--blue);':''}border-radius:var(--radius);padding:12px;margin-bottom:10px">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px;gap:8px">
         ${totalDisplay}
         ${confBadge}
@@ -2057,6 +2175,7 @@ window.renderHistory=function(){
       ${photoBreakdownHtml}
       ${notesShort?`<div style="font-size:11px;color:var(--hint);font-style:italic;margin-bottom:6px">${notesShort}</div>`:''}
       <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;align-items:center">
+        ${multiBadge}
         ${sizeBadge}
         ${e.albaran?`<span style="font-size:11px;color:var(--muted)">Albarán:${e.albaran}</span>`:''}
       </div>
@@ -2069,10 +2188,20 @@ window.renderHistory=function(){
 };
 /* v7.9.5: ya no copia formato Odoo, solo un resumen en texto plano,
    ej. "Pellet 8mm · 55 uds · 23/9/2026 18:22 · Confianza alta". */
+/* Nº de fotos de una entrada de multifoto, o 0 si no lo es. Las entradas
+   nuevas llevan photoBreakdown; las anteriores a v7.9.6 solo tienen el
+   texto "Multifoto N fotos · …" en notes. */
+function getMultiPhotoCount(e){
+  if(Array.isArray(e.photoBreakdown)&&e.photoBreakdown.length)return e.photoBreakdown.length;
+  const m=/^Multifoto (\d+) fotos/.exec(e.notes||'');
+  return m?parseInt(m[1],10):0;
+}
 function buildResultSummary(e){
   const sizesUsed=[e.size4>0?4:null,e.size8>0?8:null,e.size12>0?12:null].filter(Boolean);
   const sizeLabel=sizesUsed.length===1?`${sizesUsed[0]}mm`:sizesUsed.map(s=>`${s}mm:${e['size'+s]}`).join(' + ');
   const parts=[`Pellet ${sizeLabel}`,`${e.total} uds`,e.date];
+  const n=getMultiPhotoCount(e);
+  if(n)parts.push(`Multifoto (${n} fotos)`);
   if(e.method==='weigh')parts.push('Pesada báscula');
   else if(e.confidence)parts.push(`Confianza ${e.confidence}`);
   return parts.join(' · ');
