@@ -57,6 +57,10 @@
     select option{background:var(--surface2);}
     .tip{background:var(--blue-dim);border:0.5px solid rgba(74,158,255,0.15);border-radius:var(--radius);padding:10px 12px;font-size:12px;color:#4a9eff;line-height:1.6;margin-bottom:12px;}
     .warn{background:var(--orange-dim);border:0.5px solid rgba(249,115,22,0.15);border-radius:var(--radius);padding:10px 12px;font-size:12px;color:var(--orange);line-height:1.6;margin-bottom:12px;}
+    .danger{background:var(--red-dim);border:0.5px solid rgba(239,68,68,0.35);border-radius:var(--radius);padding:12px 14px;font-size:13px;color:var(--red);line-height:1.6;margin-bottom:12px;font-weight:700;}
+    /* popup "¿Qué pellet vas a contar?" (v8.2) — botones grandes, el último usado resaltado */
+    .size-pick-btn{flex:1;min-height:80px;justify-content:center;font-size:18px;font-weight:700;padding:8px 4px;}
+    .size-pick-btn.last-used{background:var(--blue-dim);border-color:var(--blue);color:var(--blue);}
     .alb-result{padding:10px 12px;border-radius:var(--radius);font-size:13px;font-weight:700;margin-bottom:12px;display:none;background:var(--surface);border:0.5px solid var(--border);}
     .spinner{display:none;width:16px;height:16px;border:2px solid var(--border2);border-top-color:var(--blue);border-radius:50%;animation:spin 0.7s linear infinite;}
     @keyframes spin{to{transform:rotate(360deg)}}
@@ -169,7 +173,7 @@
     <h1>Pellet Counter <span class="ai-badge">✦ Claude AI</span></h1>
     <div style="display:flex;align-items:center;gap:10px">
       <div id="analyzeSpinner" class="spinner"></div>
-      <span class="ver">v8.1</span>
+      <span class="ver">v8.2</span>
     </div>
   </div>
   <div class="subbar" id="exCounts" style="border-bottom:none;padding-bottom:2px"></div>
@@ -238,8 +242,8 @@
         <div class="tip" id="multiSizeTip" style="margin-bottom:10px"></div>
 
         <!-- Android/iOS: input con capture, sin cambios (v8.1) -->
-        <div class="upload-zone" id="uploadZoneMultiMobile" style="padding:16px" onclick="document.getElementById('fileMulti').click()">
-          <input type="file" id="fileMulti" accept="image/*" capture="environment" multiple onchange="addMultiFoto(event)">
+        <div class="upload-zone" id="uploadZoneMultiMobile" style="padding:16px" onclick="startMultiPhoto('fileMulti')">
+          <input type="file" id="fileMulti" accept="image/*" capture="environment" multiple onchange="addMultiFoto(event)" onclick="event.stopPropagation()">
           <div class="uz-icon" style="font-size:22px">📸</div>
           <p style="font-size:13px">Añadir foto de grupo</p>
           <span>Puedes añadir varias fotos seguidas</span>
@@ -247,9 +251,9 @@
 
         <!-- Windows/desktop/Surface (v8.1): cámara nativa + archivo, en vez de capture -->
         <div id="uploadChoiceMultiDesktop" style="display:none;gap:8px;margin-bottom:12px">
-          <button onclick="document.getElementById('fileMultiDesktop').click()" style="flex:1;justify-content:center;padding:14px 8px">📁 Subir desde archivo</button>
+          <button onclick="startMultiPhoto('fileMultiDesktop')" style="flex:1;justify-content:center;padding:14px 8px">📁 Subir desde archivo</button>
           <input type="file" id="fileMultiDesktop" accept="image/*" multiple style="display:none" onchange="addMultiFoto(event)">
-          <button onclick="openCameraModal('multi')" style="flex:1;justify-content:center;padding:14px 8px">📷 Usar cámara</button>
+          <button onclick="startMultiPhoto('camera')" style="flex:1;justify-content:center;padding:14px 8px">📷 Usar cámara</button>
         </div>
 
         <div class="status-bar" id="multiStatus" style="display:none"></div>
@@ -289,8 +293,8 @@
       <div class="count-left">
 
       <!-- Android/iOS: input con capture, sin cambios (v8.1) -->
-      <div class="upload-zone" id="uploadZoneMobile" onclick="document.getElementById('fileCount').click()">
-        <input type="file" id="fileCount" accept="image/*" capture="environment" onchange="loadCount(event)">
+      <div class="upload-zone" id="uploadZoneMobile" onclick="startSinglePhoto('fileCount')">
+        <input type="file" id="fileCount" accept="image/*" capture="environment" onchange="loadCount(event)" onclick="event.stopPropagation()">
         <div class="uz-icon">📸</div>
         <p>Fotografiar o subir imagen</p>
         <span>Claude AI detecta y cuenta automáticamente</span>
@@ -298,11 +302,11 @@
 
       <!-- Windows/desktop/Surface (v8.1): cámara nativa + archivo, en vez de capture -->
       <div id="uploadChoiceDesktop" style="display:none;gap:8px;margin-bottom:12px">
-        <button onclick="document.getElementById('fileCountDesktop').click()" style="flex:1;justify-content:center;padding:20px 8px;flex-direction:column;gap:6px">
+        <button onclick="startSinglePhoto('fileCountDesktop')" style="flex:1;justify-content:center;padding:20px 8px;flex-direction:column;gap:6px">
           <span style="font-size:22px">📁</span><span style="font-size:12px">Subir desde archivo</span>
         </button>
         <input type="file" id="fileCountDesktop" accept="image/*" style="display:none" onchange="loadCount(event)">
-        <button onclick="openCameraModal('single')" style="flex:1;justify-content:center;padding:20px 8px;flex-direction:column;gap:6px">
+        <button onclick="startSinglePhoto('camera')" style="flex:1;justify-content:center;padding:20px 8px;flex-direction:column;gap:6px">
           <span style="font-size:22px">📷</span><span style="font-size:12px">Usar cámara</span>
         </button>
       </div>
@@ -312,6 +316,14 @@
       <div class="warn" id="overlapWarning" style="display:none;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;font-weight:700">
         <span>⚠️ Solapamiento detectado</span>
         <button id="btnActivateMultifoto" style="font-size:11px;padding:6px 10px">📚 Activar multifoto</button>
+      </div>
+      <!-- v8.2: aviso de tamaño incorrecto (size_match=false) — la entrada NO se guarda hasta decidir -->
+      <div class="danger" id="sizeMismatchWarning" style="display:none">
+        <div id="sizeMismatchText" style="margin-bottom:10px"></div>
+        <div class="btn-row">
+          <button id="btnSizeRepeat" class="btn-primary" onclick="repeatWithDetectedSize()" style="flex:1;justify-content:center"></button>
+          <button id="btnSizeKeep" onclick="keepDeclaredSize()" style="flex:1;justify-content:center"></button>
+        </div>
       </div>
       <div class="alb-result"  id="albaranResult"></div>
       <div class="canvas-wrap" id="wrapCount"><canvas id="cvCount"></canvas><div id="zoneOverlay" class="zone-overlay" hidden></div></div>
@@ -477,6 +489,12 @@
         <input type="file" id="fileImportData" accept="application/json,.json" style="display:none" onchange="importAllData(event)">
       </div>
       <div class="card">
+        <p class="card-label">🗄️ Almacenamiento y mantenimiento</p>
+        <div id="storageInfo" style="margin-bottom:12px"></div>
+        <p style="font-size:11px;color:var(--hint);margin-bottom:10px;line-height:1.5">Estimación del espacio que ocupan los datos de la app en este dispositivo. La app nunca borra ejemplos ni historial por su cuenta para hacer sitio: si no cabe algo, te lo dice.</p>
+        <button onclick="removeDuplicateHistory()" style="width:100%;justify-content:center">🧹 Eliminar duplicados del historial</button>
+      </div>
+      <div class="card">
         <p class="card-label">⚖️ Pesos unitarios</p>
         <p style="font-size:11px;color:var(--hint);margin-bottom:10px;line-height:1.5">Peso individual usado para calcular unidades a partir del peso neto en Pesada rápida (tab Pesar).</p>
         <div class="warn" style="margin-bottom:10px">⚠️ Solo administrador — cambiar estos valores afecta a todos los cálculos de báscula.</div>
@@ -534,8 +552,14 @@
       <div class="card">
         <p class="card-label">Acerca de</p>
         <div style="font-size:12px;color:var(--muted);line-height:2.2">
-          <div><strong style="color:var(--text)">Pellet Counter v8.1</strong></div>
+          <div><strong style="color:var(--text)">Pellet Counter v8.2</strong></div>
           <div>Motor IA · Claude Sonnet Vision</div>
+          <div>Popup de tamaño antes de cada foto · "¿Qué pellet vas a contar?"</div>
+          <div>Aviso de tamaño incorrecto · size_match, con "Repetir con Xmm" sin guardar el error</div>
+          <div>Historial · 🗑 borrar entradas individuales, y 🧹 eliminar duplicados</div>
+          <div>Alerta de solapamiento · ahora desde el campo overlap del JSON, sin falsos positivos</div>
+          <div>Confirmar total · una sola entrada por lote, aunque se pulse varias veces</div>
+          <div>Ejemplos few-shot · tope por tamaño (antes 10 en total) y medidor de almacenamiento</div>
           <div>Patch cámara · botón "🔄 Cambiar cámara" si hay más de una disponible</div>
           <div>Cámara nativa en Windows/Surface · getUserMedia, sin cambios en móvil</div>
           <div>Sincronización entre dispositivos · exportar/importar datos en JSON</div>
@@ -604,6 +628,19 @@
   <button class="btn-primary" id="installBtn" style="flex-shrink:0">Instalar</button>
 </div>
 
+<!-- Popup "¿Qué pellet vas a contar?" antes de cada foto (v8.2) -->
+<div id="sizePopup" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.8);z-index:9997;align-items:center;justify-content:center;padding:16px" onclick="if(event.target===this)cancelSizePopup()">
+  <div style="background:var(--surface);border:0.5px solid var(--border2);border-radius:var(--radius-lg);padding:20px;width:100%;max-width:440px">
+    <p style="font-size:17px;font-weight:700;text-align:center;margin-bottom:16px">¿Qué pellet vas a contar?</p>
+    <div style="display:flex;gap:10px;margin-bottom:14px">
+      <button class="size-pick-btn" data-size="4"  onclick="pickPelletSize('4')">● 4mm</button>
+      <button class="size-pick-btn" data-size="8"  onclick="pickPelletSize('8')">● 8mm</button>
+      <button class="size-pick-btn" data-size="12" onclick="pickPelletSize('12')">● 12mm</button>
+    </div>
+    <button onclick="cancelSizePopup()" style="width:100%;justify-content:center">Cancelar</button>
+  </div>
+</div>
+
 <!-- Cámara nativa Windows/desktop/Surface (v8.1) -->
 <div id="cameraModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:9998;align-items:center;justify-content:center;padding:16px">
   <div id="cameraLayout" style="display:flex;flex-direction:column;gap:16px;width:100%;max-width:1100px;align-items:center">
@@ -623,13 +660,13 @@
   <canvas id="cameraCaptureCanvas" style="display:none"></canvas>
 </div>
 
-<!-- splash v8.1 -->
+<!-- splash v8.2 -->
 <div id="splash" style="position:fixed;inset:0;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:9999;transition:opacity 0.4s">
   <div style="font-size:44px;margin-bottom:14px">⬤</div>
   <div style="font-size:20px;font-weight:700;color:var(--text);letter-spacing:-0.5px">Pellet Counter</div>
   <div style="font-size:12px;color:var(--green);font-weight:600;margin-top:6px;display:flex;align-items:center;gap:8px">
     <span>✦ Claude AI</span><span style="color:var(--hint)">·</span>
-    <span style="font-family:monospace;color:var(--blue)">v8.1</span>
+    <span style="font-family:monospace;color:var(--blue)">v8.2</span>
   </div>
   <div style="margin-top:28px;width:60px;height:2px;background:var(--surface2);border-radius:2px;overflow:hidden">
     <div style="height:100%;background:linear-gradient(90deg,var(--blue),var(--green));border-radius:2px;animation:load 1.3s ease-out forwards"></div>

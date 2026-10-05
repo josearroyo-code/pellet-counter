@@ -1,5 +1,52 @@
 /* ══════════════════════════════════════════
-   Pellet Counter v8.1 — cámara nativa en Windows/desktop/Surface
+   Pellet Counter v8.2 — mejoras de tests reales en Surface Pro
+   REGLA DE VERSIONADO (pedida por el usuario en v8.2): cualquier cambio
+          que afecte a funcionalidad visible actualiza VERSION y se ve
+          en splash + topbar (+ CACHE en sw.js). Solo CSS menor o fixes
+          internos pueden mantener el número. (Sustituye al patrón
+          anterior de "patch = solo bumpear CACHE" de v7.5.1/v8.1.1.)
+   NUEVO 1: popup "¿Qué pellet vas a contar?" (4/8/12mm, botones ≥80px,
+          último usado resaltado) antes de cada foto: cámara, archivo
+          (desktop) o zona de subida (móvil). Carga el perfil y luego
+          abre cámara/selector. En multifoto solo en la primera foto del
+          lote (lote vacío). askPelletSize/pickPelletSize/startSinglePhoto/
+          startMultiPhoto. Los inputs de las upload-zone móviles llevan
+          onclick=stopPropagation: si no, el .click() programático burbujea
+          a la zona y reabriría el popup en bucle.
+   NUEVO 2: el JSON de Claude incluye size_match/size_detected. Si no
+          coincide: aviso rojo antes del resultado con [Repetir con Xmm]
+          [Mantener Ymm]. La entrada NO se guarda hasta decidir (Repetir
+          la descarta; Mantener la guarda; un análisis nuevo con aviso
+          sin resolver la guarda marcada en notes, no se pierde). En
+          multifoto solo se avisa por foto. Riesgo conocido: sin escala
+          de referencia en la foto, Claude puede dar falsos positivos —
+          por eso el prompt pide certeza razonable y "Mantener" es un clic.
+   NUEVO 3: 🗑 en cada entrada del historial (confirm "¿Borrar esta
+          entrada?"), recalcula contadores/estadísticas. Las entradas
+          ahora llevan `id` y el ajuste ±1 modifica la entrada por id en
+          vez de "h[0]" (con borrado individual, h[0] podía ser otra).
+   FIX 4: alerta de solapamiento desde el booleano `overlap` del JSON;
+          adiós a buscar palabras clave en las notas (una nota "no hay
+          solapamiento" disparaba el falso positivo).
+   FIX 5: multiConfirmed ya estaba (v7.9.9) pero solo frena dobles
+          disparos <600ms: pulsaciones repetidas del operario seguían
+          duplicando. Ahora un lote tiene UNA entrada (multiSavedId/Sig):
+          re-confirmar sin cambios no guarda; con cambios sustituye la
+          entrada. Feedback más visible (toast grande + botón "✓ Total
+          confirmado"). Nuevo botón Ajustes "🧹 Eliminar duplicados".
+   INVESTIGADO 6: pérdida de ejemplos 12mm (10e→0e). Causa más probable
+          en el código: MAX_REFERENCE_EXAMPLES=10 era un tope GLOBAL (no
+          por tamaño) con shift() del más antiguo; guardar 10 ejemplos de
+          4mm/8mm vaciaba los de 12mm sin avisar. Segundo camino:
+          persistReferenceExamples hacía shift() en bucle ante
+          QuotaExceededError. (Tercer sospechoso, no del código: importar
+          un backup v8.0 sobreescribe referenceExamples entero.) No se
+          pudo CONFIRMAR cuál ocurrió — no hay acceso al localStorage del
+          dispositivo. Arreglado: tope por tamaño (MAX_EXAMPLES_PER_SIZE)
+          con aviso al reemplazar, jamás se borra nada por cuota (se avisa
+          y no se guarda), JPEG q0.7 máx 400px, medidor "Almacenamiento:
+          X/5 MB" en Ajustes y aviso al ≥80%.
+   v8.1: cámara nativa en Windows/desktop/Surface
    PATCH CÁMARA: botón "🔄 Cambiar cámara" (`switchCamera`) — tras
           conceder el permiso se enumeran las cámaras disponibles
           (enumerateDevices) y, si hay más de una, el botón aparece
@@ -255,7 +302,7 @@
    Fix: JSON parser robusto
    ══════════════════════════════════════════ */
 
-const VERSION = 'v8.1';
+const VERSION = 'v8.2';
 
 /* ══ CAPTURA DE LOGS (v7.9.9) ══
    No hay DevTools a mano en un móvil real — esto guarda los últimos
@@ -280,6 +327,14 @@ let lastImageMime   = 'image/jpeg';
 let isAnalyzing     = false;
 let counts          = { c4:0, c8:0, c12:0, total:0 };
 let lastConfidence  = null;
+/* v8.2: id de la entrada del historial que el ajuste ±1 puede modificar
+   (null mientras haya un aviso de tamaño sin resolver: esa entrada aún
+   no está guardada, ver pendingMismatchEntry). */
+let lastVisionEntryId = null;
+/* v8.2: entrada de un análisis con size_match=false, retenida SIN guardar
+   hasta que el usuario elija "Repetir con Xmm" (se descarta) o "Mantener". */
+let pendingMismatchEntry = null;
+let pendingMismatchSize  = null;
 /* 4mm corregido en v7.9.4: 0.071g/ud verificado con 2 básculas (antes
    0.0811g, erróneo). Ver migrateP4Weight() para la migración one-shot
    de localStorage. */
@@ -294,6 +349,14 @@ let multiManualAdjust = 0;
    historial se duplicaba al pulsar Confirmar) — se resetea en
    resetMulti(), es decir, cada vez que se activa/desactiva multifoto. */
 let multiConfirmed = false;
+/* v8.2: "Confirmar total" guardaba una entrada nueva en CADA pulsación
+   (el flag de arriba solo frena dobles disparos en <600ms; un operario
+   que no veía feedback volvía a pulsar y duplicaba). Ahora un lote tiene
+   UNA entrada de historial: si se re-confirma sin cambios no se guarda
+   nada, y si hubo cambios (más fotos/correcciones) se SUSTITUYE la
+   entrada anterior del mismo lote. Se reinicia al vaciar/reiniciar el lote. */
+let multiSavedId = null;
+let multiSavedSig = null;
 
 /* ── estado zonas / wakelock ── */
 let zonesActive = false;
@@ -410,7 +473,7 @@ window.switchTab = function(name) {
   qsa('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
   qsa('.panel').forEach(p => p.classList.toggle('active', p.id === 'panel-' + name));
   if (name === 'history') { renderHistory(); renderHistoryExamples(); }
-  if (name === 'settings') { renderExamplesSettings(); renderStats(); }
+  if (name === 'settings') { renderExamplesSettings(); renderStats(); renderStorageInfo(); }
 };
 
 /* ══ SETTINGS ══ */
@@ -519,7 +582,7 @@ function updateMultiSizeTip(){
    para no acumular memoria en una sesión larga de la PWA. */
 function resetMulti() {
   multifotos.forEach(f=>{if(f.blobUrl)URL.revokeObjectURL(f.blobUrl);});
-  multifotos=[]; multiTotal=0; multiManualAdjust=0; multiConfirmed=false; renderMultiList(); updateMultiTotal();
+  multifotos=[]; multiTotal=0; multiManualAdjust=0; multiConfirmed=false; multiSavedId=null; multiSavedSig=null; renderMultiList(); updateMultiTotal();
 }
 
 function renderMultiList() {
@@ -543,6 +606,7 @@ function renderMultiList() {
           `:`<span style="font-size:14px;font-weight:700;color:var(--muted)">${f.analyzing?'⏳ Analizando…':'⏸ En cola'}</span>`}
         </div>
         <div style="font-size:11px;color:var(--hint);margin-top:2px">Foto ${i+1}${f.result?' · Confianza '+f.result.confidence:''}</div>
+        ${f.result?.sizeWarn?`<div style="font-size:11px;color:var(--red);font-weight:700">⚠️ Parece ${f.result.sizeWarn}, no ${f.result.sizeDeclared}mm</div>`:''}
         ${f.result?.notes?`<div style="font-size:10px;color:var(--hint);font-style:italic">${f.result.notes}</div>`:''}
       </div>
       <button onclick="removeMultiFoto(${i})" style="padding:4px 8px;font-size:11px;color:var(--orange);border-color:var(--orange);flex-shrink:0">✕</button>
@@ -587,12 +651,21 @@ window.setMultiTotalManual=function(value){
   updateMultiTotal();
 };
 
+/* Firma del estado actual del lote (total + total por foto): sirve para
+   saber si "Confirmar total" ya se guardó tal cual o hay cambios nuevos. */
+function multiSignature(){ return multiTotal+'|'+multifotos.map(f=>f.result?.total||0).join(','); }
+
 function updateMultiTotal() {
   multiTotal=Math.max(0,multifotos.reduce((s,f)=>s+(f.result?.total||0),0)+multiManualAdjust);
   const el=qs('#multiTotal'); if(el)el.value=multiTotal;
   const ready=multifotos.length>0&&multifotos.every(f=>f.result);
   const btn=qs('#btnMultiConfirm');
-  if(btn)btn.style.display=ready?'flex':'none';
+  if(btn){
+    btn.style.display=ready?'flex':'none';
+    /* v8.2: feedback persistente — si el lote tal como está ya se guardó,
+       el botón lo dice (vuelve a "Confirmar total" en cuanto algo cambie). */
+    btn.textContent=(ready&&multiSavedId&&multiSavedSig===multiSignature())?'✓ Total confirmado':'✓ Confirmar total';
+  }
   const adjEl=qs('#multiManualAdj');
   if(adjEl)adjEl.style.display=ready?'flex':'none';
   /* estado de fotos pendientes */
@@ -608,7 +681,10 @@ function updateMultiTotal() {
 window.removeMultiFoto = function(i) {
   const f=multifotos[i];
   if(f?.blobUrl)URL.revokeObjectURL(f.blobUrl);
-  multifotos.splice(i,1); renderMultiList(); updateMultiTotal();
+  multifotos.splice(i,1);
+  /* lote vacío = lote nuevo: la próxima confirmación crea otra entrada */
+  if(multifotos.length===0){multiSavedId=null;multiSavedSig=null;multiManualAdjust=0;}
+  renderMultiList(); updateMultiTotal();
 };
 
 /* Compartido entre el selector de archivos y la cámara nativa (v8.1) */
@@ -686,9 +762,10 @@ REGLAS ABSOLUTAS:
 6. Sé honesto con tu propia incertidumbre: si los objetos están muy amontonados, solapados, mal iluminados o hay cualquier duda razonable sobre el conteo exacto, responde confidence "media" o "baja" en vez de "alta".
 
 RESPONDE EXCLUSIVAMENTE CON ESTE JSON, CERO texto adicional:
-{"small":0,"medium":0,"large":0,"total":0,"confidence":"alta","notes":null}
+{"small":0,"medium":0,"large":0,"total":0,"confidence":"alta","size_match":true,"size_detected":null,"notes":null}
 
-Sustituye los 0 por los conteos reales. confidence: "alta" "media" o "baja". notes: string o null.`;
+Sustituye los 0 por los conteos reales. confidence: "alta" "media" o "baja". notes: string o null.
+size_match / size_detected: Compara el tamaño visual de los discos con el tamaño declarado (${singleSize}mm). Si no coincide, pon size_match=false e indica en size_detected el tamaño que parecen ("4mm", "8mm" o "12mm"). Solo pon size_match=false si estás razonablemente seguro; ante la duda pon size_match=true y size_detected=null.`;
 
   console.log('MULTIFOTO PROMPT:', prompt.slice(0, 200));
   console.log('MULTIFOTO IMAGE SIZE:', entry.base64.length);
@@ -727,7 +804,14 @@ Sustituye los 0 por los conteos reales. confidence: "alta" "media" o "baja". not
     }
     const r=JSON.parse(text);
     const total=r.total||r.medium||0;
-    entry.result={total,aiTotal:total,confidence:r.confidence||'media',notes:r.notes};
+    /* v8.2: aviso de tamaño por foto. En multifoto solo se AVISA (no hay
+       "repetir con otro tamaño": mezclaría tamaños dentro de un mismo lote). */
+    let sizeWarn=null;
+    if(r.size_match===false){
+      const det=String(r.size_detected||'').trim();
+      if(['4mm','8mm','12mm'].includes(det)&&det!==singleSize+'mm')sizeWarn=det;
+    }
+    entry.result={total,aiTotal:total,confidence:r.confidence||'media',notes:r.notes,sizeWarn,sizeDeclared:singleSize};
   } catch(err) {
     entry.result={total:0,aiTotal:0,confidence:'baja',notes:'Error: '+err.message};
   } finally {
@@ -748,6 +832,7 @@ window.confirmMultiTotal = function() {
   if (multiConfirmed) return;
   multiConfirmed = true;
   setTimeout(() => { multiConfirmed = false; }, 600);
+  flushPendingMismatch(); /* si había un aviso de tamaño de foto única sin resolver, no se pierde */
   const singleSize=qs('#singleSize').value;
   /* v7.9.6: confianza "alta" solo si el total confirmado coincide
      exactamente con la suma de lo que Claude reportó originalmente
@@ -770,7 +855,20 @@ window.confirmMultiTotal = function() {
   qs('#btnSaveExample').style.display='none';
   qs('#btnZones').style.display='none'; exitZonesView();
   lastConfidence=confidence;
-  saveHistoryEntry({
+  const scrollToResults=()=>{
+    const resEl=qs('#resultsCount');
+    if(resEl)setTimeout(()=>resEl.scrollIntoView({behavior:'smooth',block:'start'}),50);
+  };
+  /* v8.2: un lote = UNA entrada de historial. Si el lote está exactamente
+     como la última vez que se confirmó, no se guarda nada (antes cada
+     pulsación creaba otra entrada). */
+  const sig=multiSignature();
+  if(multiSavedId&&multiSavedSig===sig){
+    showBigToast(`✓ Total ya confirmado: ${multiTotal} uds`);
+    scrollToResults();
+    return;
+  }
+  const entry={
     date:new Date().toLocaleDateString('es-ES')+' '+new Date().toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'}),
     total:multiTotal,aiTotal:rawSum,size4:counts.c4,size8:counts.c8,size12:counts.c12,
     product:(qs('#productDesc').value||'').slice(0,60),confidence,
@@ -781,12 +879,21 @@ window.confirmMultiTotal = function() {
     photoBreakdown:multifotos.map(f=>({ai:f.result?.aiTotal??f.result?.total??0,total:f.result?.total||0})),
     albaran:alb||null
     // ODOO - pendiente de implementar: odoo:buildOdooText()
-  });
+  };
+  /* Si el lote ya tenía entrada y cambió (más fotos / correcciones), se
+     SUSTITUYE esa entrada en vez de añadir otra. */
+  if(multiSavedId&&replaceHistoryEntry(multiSavedId,entry)){
+    lastVisionEntryId=multiSavedId;
+  } else {
+    multiSavedId=saveHistoryEntry(entry);
+    lastVisionEntryId=multiSavedId;
+  }
+  multiSavedSig=sig;
+  updateMultiTotal(); /* refresca la etiqueta del botón a "✓ Total confirmado" */
   renderExampleCounts();
-  showToast(`✓ Total confirmado: ${multiTotal} uds de ${singleSize}mm`);
+  showBigToast(`✓ Total confirmado: ${multiTotal} uds de ${singleSize}mm`);
   vibrateDone();
-  const resEl=qs('#resultsCount');
-  if(resEl)setTimeout(()=>resEl.scrollIntoView({behavior:'smooth',block:'start'}),50);
+  scrollToResults();
 };
 
 /* ══ FOTO ÚNICA ══ */
@@ -812,6 +919,52 @@ window.loadCount = function(e) {
   const reader=new FileReader();
   reader.onload=ev=>processSinglePhotoDataUrl(ev.target.result, f.type||'image/jpeg');
   reader.readAsDataURL(f);
+};
+
+/* ══ POPUP "¿QUÉ PELLET VAS A CONTAR?" (v8.2) ══
+   Antes de CADA foto (cámara, archivo, o la zona de subida en móvil) se
+   pregunta el tamaño y se carga su perfil — así el prompt siempre lleva
+   la descripción correcta en vez de depender de que el operario se
+   acuerde de tocar el perfil. El último tamaño usado sale resaltado.
+   En multifoto solo se pregunta en la primera foto del lote (lote vacío);
+   el resto del lote reutiliza ese tamaño.
+   OJO: el input de archivo/cámara se dispara desde el click del botón del
+   popup (un gesto de usuario directo), no desde un setTimeout/await —
+   si no, los navegadores móviles bloquean el selector de archivos. */
+let sizePopupCallback = null;
+
+window.askPelletSize = function(cb){
+  sizePopupCallback = cb;
+  const last = localStorage.getItem('singleSize') || '8';
+  qsa('.size-pick-btn').forEach(b => b.classList.toggle('last-used', b.dataset.size === last));
+  qs('#sizePopup').style.display = 'flex';
+};
+window.pickPelletSize = function(size){
+  qs('#sizePopup').style.display = 'none';
+  loadProfile(size);
+  updateMultiSizeTip();
+  const cb = sizePopupCallback; sizePopupCallback = null;
+  if (cb) cb(size);
+};
+window.cancelSizePopup = function(){
+  qs('#sizePopup').style.display = 'none';
+  sizePopupCallback = null;
+};
+
+/* source: id de un <input type=file> ('fileCount', 'fileCountDesktop') o 'camera' */
+function launchPhotoSource(source, cameraMode){
+  if (source === 'camera') openCameraModal(cameraMode);
+  else qs('#' + source).click();
+}
+window.startSinglePhoto = function(source){
+  /* con multifoto activo, la zona principal también añade al lote (ver loadCount) */
+  const isMulti = multiMode;
+  const go = () => launchPhotoSource(source, isMulti ? 'multi' : 'single');
+  if (!isMulti || multifotos.length === 0) askPelletSize(go); else go();
+};
+window.startMultiPhoto = function(source){
+  const go = () => launchPhotoSource(source, 'multi');
+  if (multifotos.length === 0) askPelletSize(go); else go();
 };
 
 /* ══ CÁMARA NATIVA — Windows/desktop/Surface (v8.1, patch cámara v8.1.1) ══
@@ -922,6 +1075,7 @@ async function runCountAI() {
   if(!apiKey){showToast('Introduce tu API key en ⚙️ Ajustes',true);switchTab('settings');return;}
   isAnalyzing=true;
   acquireWakeLock();
+  flushPendingMismatch(); /* un aviso de tamaño sin resolver NO se pierde: se guarda marcado */
   qs('#analyzeSpinner').style.display='block';qs('#btnRecount').disabled=true;
   setStatus('statusCount','🔍 Claude está analizando la imagen…');qs('#statusCount').style.color='';
   qs('#confWarning').style.display='none';
@@ -936,6 +1090,11 @@ async function runCountAI() {
   const sizeInstruction=sizeMode==='single'
     ?`Todos los objetos son del mismo tamaño (${singleSize}mm). Devuelve small=0, large=0 y pon el total en medium.`
     :`Clasifica: pequeños (~4mm) en "small", medianos (~8mm) en "medium", grandes (~12mm) en "large".`;
+  /* v8.2: comprobación de tamaño declarado. Solo en modo "un solo tamaño":
+     en modo clasificar no hay tamaño declarado que contrastar. */
+  const sizeCheckInstruction=sizeMode==='single'
+    ?`Compara el tamaño visual de los discos con el tamaño declarado (${singleSize}mm). Si no coincide, pon size_match=false e indica en size_detected el tamaño que parecen ("4mm", "8mm" o "12mm"). Solo pon size_match=false si estás razonablemente seguro; ante la duda pon size_match=true y size_detected=null.`
+    :`No aplica en modo clasificar: pon size_match=true y size_detected=null.`;
   const fewShotCount=sizeMode==='single'?getReferenceExamples().filter(e=>e.size===singleSize).slice(-2).length:0;
   const fewShotNote=fewShotCount>0
     ?`\nNOTA: antes de la foto a analizar se incluyen ${fewShotCount} imagen(es) de referencia, cada una con su conteo ya confirmado indicado por texto. Son solo contexto de calibración de escala/densidad — NO las cuentes. La imagen que debes contar es la ÚLTIMA imagen, la que aparece justo antes de este texto.\n`
@@ -956,9 +1115,11 @@ REGLAS ABSOLUTAS:
 6. Sé honesto con tu propia incertidumbre: si los objetos están muy amontonados, solapados, mal iluminados o hay cualquier duda razonable sobre el conteo exacto, responde confidence "media" o "baja" en vez de "alta".
 
 RESPONDE EXCLUSIVAMENTE CON ESTE JSON. CERO palabras antes o después. CERO markdown:
-{"small":0,"medium":0,"large":0,"total":0,"confidence":"alta","notes":null}
+{"small":0,"medium":0,"large":0,"total":0,"confidence":"alta","overlap":false,"size_match":true,"size_detected":null,"notes":null}
 
-Sustituye los 0 por los conteos reales. confidence: "alta" "media" o "baja". notes: string o null.`;
+Sustituye los 0 por los conteos reales. confidence: "alta" "media" o "baja". notes: string o null.
+overlap: true SOLO si hay pellets apilados o muy solapados que impiden contarlos uno a uno con fiabilidad; false si están separados o apenas se rozan.
+size_match / size_detected: ${sizeCheckInstruction}`;
 
   console.log('SINGLE PROMPT:', prompt.slice(0, 200));
   console.log('SINGLE IMAGE SIZE:', lastImageBase64.length);
@@ -1030,18 +1191,37 @@ Sustituye los 0 por los conteos reales. confidence: "alta" "media" o "baja". not
       confWarnEl.style.display='none';
     }
     lastConfidence=result.confidence;
-    checkOverlapNotice(result.notes);
+    /* v8.2: la alerta de solapamiento sale SOLO del campo booleano
+       "overlap" del JSON (antes se buscaban palabras clave en las notas y
+       una nota tipo "no hay solapamiento" disparaba un falso positivo). */
+    checkOverlapNotice(result.overlap);
 
     drawOverlay(total,result.confidence);
     qs('#resultsCount').style.display='block';qs('#manualAdj').style.display='flex';qs('#btnSaveExample').style.display='flex';qs('#btnZones').style.display='';
-    saveHistoryEntry({
+
+    /* v8.2: ¿el tamaño visual no coincide con el declarado? Solo se
+       acepta el aviso si size_detected es un tamaño válido y distinto. */
+    let mismatchSize=null;
+    if(sizeMode==='single'&&result.size_match===false){
+      const det=String(result.size_detected||'').trim();
+      if(['4mm','8mm','12mm'].includes(det)&&det!==singleSize+'mm')mismatchSize=det.replace('mm','');
+      else console.log('size_match=false pero size_detected no utilizable:',result.size_detected);
+    }
+    const historyEntry={
       date:new Date().toLocaleDateString('es-ES')+' '+new Date().toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'}),
       total,aiTotal:total,size4:counts.c4,size8:counts.c8,size12:counts.c12,
       product:(qs('#productDesc').value||'').slice(0,60),
       confidence:result.confidence,notes:result.notes,albaran:albaranQty||null
       // ODOO - pendiente de implementar: odoo:buildOdooText()
-    });
-    renderExampleCounts();
+    };
+    if(mismatchSize){
+      /* NO se guarda todavía: espera a "Repetir con Xmm" (se descarta) o "Mantener". */
+      lastVisionEntryId=null;
+      showSizeMismatch(singleSize,mismatchSize,historyEntry);
+    } else {
+      lastVisionEntryId=saveHistoryEntry(historyEntry);
+      renderExampleCounts();
+    }
     vibrateDone();
   } catch(err) {
     setStatus('statusCount','✗ '+err.message,'#f97316');showToast(err.message,true);
@@ -1060,13 +1240,54 @@ function drawOverlay(total,confidence){
   ctx.fillStyle=col;ctx.font='12px -apple-system,sans-serif';ctx.fillText(`Confianza ${confidence}`,20,60);
 }
 
-/* ══ ALERTA DE SOLAPAMIENTO ══ */
-const OVERLAP_KEYWORDS=['solapan','solapa','superponen','superpone','solapamiento','touching','overlapping'];
-function checkOverlapNotice(notes){
+/* ══ ALERTA DE SOLAPAMIENTO (v8.2: campo booleano `overlap` del JSON) ══ */
+function checkOverlapNotice(overlap){
   const el=qs('#overlapWarning'); if(!el) return;
-  const hit=!!notes && OVERLAP_KEYWORDS.some(k=>notes.toLowerCase().includes(k));
-  el.style.display=hit?'flex':'none';
+  el.style.display=overlap===true?'flex':'none';
 }
+
+/* ══ AVISO DE TAMAÑO INCORRECTO (v8.2) ══
+   Si Claude dice que los discos parecen de otro tamaño que el declarado,
+   se muestra un aviso rojo ANTES del resultado y la entrada NO se guarda
+   en el historial hasta que el usuario decida:
+   - "Repetir con Xmm": carga ese perfil y reanaliza la MISMA foto; la
+     entrada errónea se descarta sin guardarse.
+   - "Mantener Ymm": guarda la entrada tal cual. */
+function showSizeMismatch(declared,detected,entry){
+  pendingMismatchEntry=entry; pendingMismatchSize=detected;
+  qs('#sizeMismatchText').textContent=`⚠️ Parece que son pellets de ${detected}mm, no de ${declared}mm`;
+  qs('#btnSizeRepeat').textContent=`Repetir con ${detected}mm`;
+  qs('#btnSizeKeep').textContent=`Mantener ${declared}mm`;
+  qs('#sizeMismatchWarning').style.display='block';
+}
+function hideSizeMismatch(){
+  pendingMismatchEntry=null; pendingMismatchSize=null;
+  const el=qs('#sizeMismatchWarning'); if(el)el.style.display='none';
+}
+/* Si hay un aviso sin resolver y se lanza otro análisis (foto nueva o
+   "Analizar de nuevo"), la entrada pendiente se guarda marcada en vez de
+   perderse en silencio. Solo "Repetir con Xmm" descarta de verdad. */
+function flushPendingMismatch(){
+  if(pendingMismatchEntry){
+    const e=pendingMismatchEntry;
+    e.notes=(e.notes?e.notes+' · ':'')+`⚠️ aviso de tamaño sin resolver (parecía ${pendingMismatchSize}mm)`;
+    saveHistoryEntry(e); renderExampleCounts();
+  }
+  hideSizeMismatch();
+}
+window.keepDeclaredSize=function(){
+  if(!pendingMismatchEntry)return;
+  lastVisionEntryId=saveHistoryEntry(pendingMismatchEntry);
+  hideSizeMismatch();
+  renderExampleCounts();
+  showToast('Guardado con el tamaño declarado');
+};
+window.repeatWithDetectedSize=function(){
+  const size=pendingMismatchSize; if(!size)return;
+  hideSizeMismatch();      /* descarta la entrada errónea SIN guardarla */
+  loadProfile(size);
+  runCountAI();
+};
 
 /* ══ COMPARACIÓN ALBARÁN ══ */
 function renderAlbaranStatus(total, albaranQty) {
@@ -1095,7 +1316,13 @@ window.adjustCount = function(delta) {
   qs('#cT').textContent=counts.total;
   renderAlbaranStatus(counts.total,parseInt(qs('#albaranQty').value)||0);
   if(zonesActive)exitZonesView();
-  updateLastHistoryTotal(counts.total,counts.c4,counts.c8,counts.c12);
+  if(pendingMismatchEntry){
+    /* entrada aún sin guardar (aviso de tamaño pendiente): se corrige ella, no otra */
+    pendingMismatchEntry.total=counts.total;
+    pendingMismatchEntry.size4=counts.c4;pendingMismatchEntry.size8=counts.c8;pendingMismatchEntry.size12=counts.c12;
+  } else {
+    updateLastHistoryTotal(counts.total,counts.c4,counts.c8,counts.c12);
+  }
   showToast(`Total ajustado: ${counts.total} uds`);
 };
 
@@ -1151,9 +1378,17 @@ function exitZonesView() {
   const btn=qs('#btnZones'); if(btn) btn.textContent='⊞ Zonas';
 }
 
-/* ══ EJEMPLOS DE REFERENCIA (few-shot) ══ */
-const MAX_REFERENCE_EXAMPLES = 10;
+/* ══ EJEMPLOS DE REFERENCIA (few-shot) ══
+   v8.2: el tope era 10 ejemplos EN TOTAL (todos los tamaños juntos) y
+   al pasarlo se hacía shift() del más antiguo — así, guardar 10
+   ejemplos de 4mm/8mm después de tener 10 de 12mm dejaba los 12mm a
+   0, sin aviso. Causa más probable de "10e → 0e" (ver notas v8.2).
+   Ahora el tope es POR TAMAÑO, y cuando se reemplaza uno se avisa. */
+const MAX_EXAMPLES_PER_SIZE = 10;
 const EXAMPLE_MAX_DIM = 400;
+const EXAMPLE_JPEG_QUALITY = 0.7;
+const STORAGE_LIMIT_MB = 5;          /* aprox.: ~5M caracteres de localStorage por origen */
+const STORAGE_WARN_PCT = 80;
 const FEWSHOT_TARGET = 5;
 const FEWSHOT_MIN = 3;
 
@@ -1195,7 +1430,7 @@ function resizeImageBase64(base64, mime, maxDim) {
       canvas.width = w; canvas.height = h;
       canvas.getContext('2d').drawImage(img, 0, 0, w, h);
       try {
-        const dataUrl = canvas.toDataURL('image/jpeg', 0.72);
+        const dataUrl = canvas.toDataURL('image/jpeg', EXAMPLE_JPEG_QUALITY);
         resolve({ base64: dataUrl.split(',')[1], mime: 'image/jpeg' });
       } catch (err) { reject(err); }
     };
@@ -1218,13 +1453,52 @@ function buildFewShotBlocks(size) {
   ]);
 }
 
+/* v8.2: antes, ante un QuotaExceededError esto hacía examples.shift()
+   en bucle hasta que cupiera — es decir, borraba ejemplos antiguos SIN
+   avisar. Ahora solo intenta guardar: si no cabe devuelve false y no
+   toca nada (el llamador avisa al usuario). */
 function persistReferenceExamples(examples) {
-  while (true) {
-    try { localStorage.setItem('referenceExamples', JSON.stringify(examples)); return true; }
-    catch (err) {
-      if (examples.length === 0) return false;
-      examples.shift();
-    }
+  try { localStorage.setItem('referenceExamples', JSON.stringify(examples)); return true; }
+  catch (err) { console.error('persistReferenceExamples falló:', err && err.name, err && err.message); return false; }
+}
+
+/* ══ ALMACENAMIENTO (v8.2) ══
+   localStorage no expone su cuota: se estima contando caracteres de
+   todas las claves+valores (el límite habitual es ~5M caracteres por
+   origen). Es una aproximación, suficiente para avisar antes de llegar
+   al límite en vez de descubrirlo por un QuotaExceededError. */
+function getStorageUsage() {
+  let chars = 0; const byKey = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    const n = k.length + (localStorage.getItem(k) || '').length;
+    chars += n; byKey.push({ key: k, chars: n });
+  }
+  byKey.sort((a, b) => b.chars - a.chars);
+  const usedMB = chars / 1048576;
+  return { usedMB, pct: usedMB / STORAGE_LIMIT_MB * 100, byKey };
+}
+
+function renderStorageInfo() {
+  const el = qs('#storageInfo'); if (!el) return;
+  const u = getStorageUsage();
+  const pct = Math.min(100, u.pct);
+  const color = u.pct >= 95 ? 'var(--red)' : u.pct >= STORAGE_WARN_PCT ? 'var(--orange)' : 'var(--green)';
+  const mb = n => (n / 1048576).toFixed(2);
+  const names = { referenceExamples: 'Ejemplos', analysisHistory: 'Historial' };
+  const detail = u.byKey.filter(x => names[x.key]).map(x => `${names[x.key]}: ${mb(x.chars)} MB`).join(' · ');
+  el.innerHTML = `
+    <div style="font-size:13px;font-weight:700;margin-bottom:6px">Almacenamiento: ${u.usedMB.toFixed(1)}/${STORAGE_LIMIT_MB} MB <span style="color:var(--muted);font-weight:500">(${Math.round(u.pct)}%, aprox.)</span></div>
+    <div style="height:8px;background:var(--surface2);border-radius:6px;overflow:hidden;margin-bottom:6px"><div style="height:100%;width:${pct}%;background:${color}"></div></div>
+    ${detail ? `<div style="font-size:11px;color:var(--hint)">${detail}</div>` : ''}
+    ${u.pct >= STORAGE_WARN_PCT ? `<div class="warn" style="margin:8px 0 0">⚠️ Almacenamiento casi lleno: borra ejemplos o historial antiguo (o exporta una copia) antes de que deje de poder guardar. La app no borra nada por su cuenta.</div>` : ''}`;
+}
+
+/* Aviso preventivo tras guardar algo pesado (ej. un ejemplo con imagen). */
+function warnIfStorageNearLimit() {
+  const u = getStorageUsage();
+  if (u.pct >= STORAGE_WARN_PCT) {
+    showToast(`⚠️ Almacenamiento al ${Math.round(u.pct)}% — revisa Ajustes`, true);
   }
 }
 
@@ -1244,21 +1518,36 @@ window.saveAsExample = async function() {
     };
     let examples = getReferenceExamples();
     examples.push(entry);
-    while (examples.length > MAX_REFERENCE_EXAMPLES) examples.shift();
-    if (!persistReferenceExamples(examples)) { showBigToast('No se pudo guardar: almacenamiento lleno', true); return; }
+    /* Tope POR TAMAÑO (v8.2): si se supera, se reemplaza el ejemplo más
+       antiguo DEL MISMO tamaño — nunca uno de otro tamaño — y se avisa. */
+    const groupOf = e => e.size || 'other';
+    let replaced = null;
+    const sameGroup = examples.filter(e => groupOf(e) === groupOf(entry));
+    if (sameGroup.length > MAX_EXAMPLES_PER_SIZE) {
+      replaced = sameGroup[0];
+      examples = examples.filter(e => e.id !== replaced.id);
+    }
+    if (!persistReferenceExamples(examples)) {
+      showBigToast('No se pudo guardar: almacenamiento lleno. NO se ha borrado nada — libera espacio en Ajustes.', true);
+      renderStorageInfo();
+      return;
+    }
     const sizeCount = entry.size ? examples.filter(e => e.size === entry.size).length : null;
+    const replNote = replaced ? ` · límite de ${MAX_EXAMPLES_PER_SIZE} alcanzado: se reemplazó el más antiguo` : '';
     if (entry.size && sizeCount === FEWSHOT_TARGET) {
       showBigToast(`¡Few-shot activo para ${entry.size}mm! (${FEWSHOT_TARGET} ejemplos)`);
     } else if (entry.size) {
-      showBigToast(`✓ Ejemplo ${entry.size}mm guardado (${sizeCount}/${FEWSHOT_TARGET})`);
+      showBigToast(`✓ Ejemplo ${entry.size}mm guardado (${sizeCount}/${FEWSHOT_TARGET})${replNote}`);
     } else {
-      showBigToast(`✓ Ejemplo guardado (${examples.length} en total)`);
+      showBigToast(`✓ Ejemplo guardado (${examples.length} en total)${replNote}`);
     }
     vibrateShort();
     renderExamplesSettings();
     renderHistoryExamples();
     renderExampleCounts();
     updateFewshotNotice();
+    renderStorageInfo();
+    warnIfStorageNearLimit();
   } catch (err) {
     showBigToast('Error al guardar ejemplo: ' + err.message, true);
   }
@@ -1271,6 +1560,7 @@ window.deleteExample = function(id) {
   renderHistoryExamples();
   renderExampleCounts();
   updateFewshotNotice();
+  renderStorageInfo();
   showToast('Ejemplo borrado');
 };
 
@@ -1282,6 +1572,7 @@ window.deleteExamplesBySize = function(size) {
   renderHistoryExamples();
   renderExampleCounts();
   updateFewshotNotice();
+  renderStorageInfo();
   showToast(`Ejemplos de ${size}mm borrados`);
 };
 
@@ -1622,16 +1913,69 @@ window.importAllData = function(e){
 
 /* ══ HISTORIAL ══ */
 function loadHistory(){return JSON.parse(localStorage.getItem('analysisHistory')||'[]');}
+/* v8.2: cada entrada lleva un `id`. Antes el ajuste ±1 posterior a un
+   análisis modificaba SIEMPRE h[0] — que podía no ser ya esa entrada
+   (ej. tras guardar una pesada, o ahora tras borrar entradas
+   individualmente) y habría corrompido otra. Ahora se busca por id. */
 function saveHistoryEntry(entry){
+  if(!entry.id)entry.id=Date.now().toString(36)+Math.random().toString(36).slice(2,6);
   const h=loadHistory();h.unshift(entry);if(h.length>50)h.pop();
   localStorage.setItem('analysisHistory',JSON.stringify(h));updateHistoryBadge();
+  return entry.id;
+}
+function replaceHistoryEntry(id,entry){
+  const h=loadHistory(),idx=h.findIndex(e=>e.id===id); if(idx<0)return false;
+  entry.id=id; h[idx]=entry;
+  localStorage.setItem('analysisHistory',JSON.stringify(h));updateHistoryBadge();
+  return true;
 }
 function updateLastHistoryTotal(newTotal,size4,size8,size12){
-  const h=loadHistory(); if(h.length===0)return;
-  h[0].total=newTotal; h[0].size4=size4; h[0].size8=size8; h[0].size12=size12;
+  if(!lastVisionEntryId)return;
+  const h=loadHistory(),idx=h.findIndex(e=>e.id===lastVisionEntryId); if(idx<0)return;
+  h[idx].total=newTotal; h[idx].size4=size4; h[idx].size8=size8; h[idx].size12=size12;
   localStorage.setItem('analysisHistory',JSON.stringify(h));
 }
 function updateHistoryBadge(){const h=loadHistory(),b=qs('#historyBadge');if(b)b.textContent=h.length>0?h.length:'';}
+
+/* Refresca todo lo que depende del historial (listas, contadores del
+   topbar, dashboard de entrenamiento) tras borrar entradas. */
+function refreshAfterHistoryChange(){
+  updateHistoryBadge(); renderHistory(); renderWeighCounts(); renderExampleCounts(); renderStats(); renderStorageInfo();
+}
+
+/* v8.2: borrar UNA entrada (🗑 en cada tarjeta). `i` es el índice real en
+   analysisHistory (el mismo _i que usa copyHistEntry). */
+window.deleteHistEntry=function(i){
+  if(!confirm('¿Borrar esta entrada?'))return;
+  const h=loadHistory(); if(i<0||i>=h.length)return;
+  const [removed]=h.splice(i,1);
+  if(removed&&removed.id&&removed.id===lastVisionEntryId)lastVisionEntryId=null;
+  if(removed&&removed.id&&removed.id===multiSavedId){multiSavedId=null;multiSavedSig=null;}
+  localStorage.setItem('analysisHistory',JSON.stringify(h));
+  refreshAfterHistoryChange();
+  showToast('Entrada borrada');
+};
+
+/* v8.2: elimina duplicados exactos del historial (misma fecha+hora, total,
+   método y reparto por tamaño), conservando la primera aparición (la más
+   reciente, ya que la lista está ordenada de más nueva a más antigua).
+   La clave incluye método y tamaños además de fecha/total para no borrar
+   por error, p. ej., una pesada y un análisis distintos del mismo minuto. */
+window.removeDuplicateHistory=function(){
+  const h=loadHistory(),seen=new Set(),keep=[];
+  h.forEach(e=>{
+    const k=[e.date,e.total,e.method||'vision',e.size4||0,e.size8||0,e.size12||0].join('|');
+    if(!seen.has(k)){seen.add(k);keep.push(e);}
+  });
+  const removed=h.length-keep.length;
+  if(removed===0){showToast('No hay duplicados en el historial');return;}
+  if(!confirm(`Se eliminarán ${removed} entradas duplicadas (misma fecha, hora y total). ¿Continuar?`))return;
+  localStorage.setItem('analysisHistory',JSON.stringify(keep));
+  if(lastVisionEntryId&&!keep.some(e=>e.id===lastVisionEntryId))lastVisionEntryId=null;
+  if(multiSavedId&&!keep.some(e=>e.id===multiSavedId)){multiSavedId=null;multiSavedSig=null;}
+  refreshAfterHistoryChange();
+  showToast(`🧹 ${removed} duplicado${removed>1?'s':''} eliminado${removed>1?'s':''}`);
+};
 
 /* ══ FILTRO HISTORIAL: Todos / Visión IA / Báscula ══
    v7.9.4: 3 botones tipo radio en vez de toggle (antes solo había
@@ -1716,7 +2060,10 @@ window.renderHistory=function(){
         ${sizeBadge}
         ${e.albaran?`<span style="font-size:11px;color:var(--muted)">Albarán:${e.albaran}</span>`:''}
       </div>
-      <button onclick="copyHistEntry(${e._i})" style="font-size:11px;padding:5px 10px">📋 Copiar resultado</button>
+      <div style="display:flex;gap:8px;align-items:center;justify-content:space-between">
+        <button onclick="copyHistEntry(${e._i})" style="font-size:11px;padding:5px 10px">📋 Copiar resultado</button>
+        <button onclick="deleteHistEntry(${e._i})" title="Borrar esta entrada" aria-label="Borrar esta entrada" style="font-size:11px;padding:5px 10px;color:var(--orange);border-color:var(--orange)">🗑</button>
+      </div>
     </div>`;
   }).join('');
 };
