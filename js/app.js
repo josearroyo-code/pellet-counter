@@ -1,4 +1,22 @@
 /* ══════════════════════════════════════════
+   Pellet Counter v8.4 — método de captura en el historial + frecuencia de
+   "confianza no disponible"
+   (test controlado 12mm, 34 pellets reales, Surface Pro 9 5G: nativa
+   horizontal 37, nativa vertical 35, app vertical 35 → la orientación/
+   encuadre parece pesar más que el método; falta app+horizontal)
+   1 HISTORIAL: cada entrada de FOTO ÚNICA guarda captureMethod
+          ('camera' = cámara en vivo de la app, 'file' = archivo subido) y
+          lo muestra como badge "📷 Cámara en vivo" / "📁 Archivo subido".
+          Las entradas anteriores a v8.4 no lo tienen (no se puede saber a
+          posteriori) y no muestran badge. Las de multifoto no registran
+          método (cada foto del lote puede venir de una fuente distinta).
+   2 CONTADOR DE CONFIANZA: se cuenta en localStorage ('confidenceStats')
+          cuántos análisis de foto única terminaron SIN confidence válida
+          frente al total (y cuántos de esos venían del reintento simple),
+          se loguea en cada análisis y se muestra en Ajustes → Estado del
+          entrenamiento, con aviso si supera el 15% (≥10 análisis).
+          El log en memoria se borra; por eso el contador es persistente.
+   ══════════════════════════════════════════
    Pellet Counter v8.3 — diagnóstico de cámara y ajustes de multifoto
    (dispositivo de prueba: Surface Pro 9 5G, siempre vía getUserMedia)
    1 CÁMARA: antes se pedía 1920×1080 ideal (Full HD) aunque la cámara
@@ -331,7 +349,7 @@
    Fix: JSON parser robusto
    ══════════════════════════════════════════ */
 
-const VERSION = 'v8.3';
+const VERSION = 'v8.4';
 
 /* ══ CAPTURA DE LOGS (v7.9.9) ══
    No hay DevTools a mano en un móvil real — esto guarda los últimos
@@ -356,6 +374,9 @@ let lastImageMime   = 'image/jpeg';
 let isAnalyzing     = false;
 let counts          = { c4:0, c8:0, c12:0, total:0 };
 let lastConfidence  = null;
+/* v8.4: cómo llegó la foto única actual: 'camera' (cámara en vivo de la
+   app) o 'file' (archivo subido). Se guarda en la entrada del historial. */
+let lastCaptureMethod = null;
 /* v8.2: id de la entrada del historial que el ajuste ±1 puede modificar
    (null mientras haya un aviso de tamaño sin resolver: esa entrada aún
    no está guardada, ver pendingMismatchEntry). */
@@ -858,7 +879,10 @@ size_match / size_detected: Compara el tamaño visual de los discos con el tama�
       const det=String(r.size_detected||'').trim();
       if(['4mm','8mm','12mm'].includes(det)&&det!==singleSize+'mm')sizeWarn=det;
     }
-    entry.result={total,aiTotal:total,confidence:r.confidence||'media',notes:r.notes,sizeWarn,sizeDeclared:singleSize};
+    const validConf=['alta','media','baja'].includes(r.confidence);
+    if(!validConf)console.log('[multifoto] Respuesta SIN confidence válida (se muestra "media"):',JSON.stringify(r));
+    recordConfidenceOutcome('multi',!validConf,false);
+    entry.result={total,aiTotal:total,confidence:validConf?r.confidence:'media',notes:r.notes,sizeWarn,sizeDeclared:singleSize};
     const over=multiPhotoOverLimit(entry.result);
     if(over)showToast(`⚠️ Una foto tiene ${total} uds: supera el máximo recomendado (${over.lim}) para ${over.size}mm`,true);
   } catch(err) {
@@ -947,8 +971,9 @@ window.confirmMultiTotal = function() {
 
 /* ══ FOTO ÚNICA ══ */
 /* Compartido entre el selector de archivos y la cámara nativa (v8.1) */
-function processSinglePhotoDataUrl(dataUrl, mime) {
+function processSinglePhotoDataUrl(dataUrl, mime, method) {
   lastImageMime=mime;
+  lastCaptureMethod=method||null;
   const img=new Image();
   img.onload=()=>{
     const canvas=qs('#cvCount'),maxW=Math.min(window.innerWidth-28,800);
@@ -966,7 +991,7 @@ window.loadCount = function(e) {
   if(multiMode){window.addMultiFoto(e);return;}
   const f=e.target.files[0]; if(!f)return;
   const reader=new FileReader();
-  reader.onload=ev=>processSinglePhotoDataUrl(ev.target.result, f.type||'image/jpeg');
+  reader.onload=ev=>processSinglePhotoDataUrl(ev.target.result, f.type||'image/jpeg', 'file');
   reader.readAsDataURL(f);
 };
 
@@ -1158,7 +1183,7 @@ window.captureCameraPhoto = function(){
   const mode=cameraTargetMode;
   closeCameraModal();
   if(mode==='single'){
-    processSinglePhotoDataUrl(dataUrl,'image/jpeg');
+    processSinglePhotoDataUrl(dataUrl,'image/jpeg','camera');
   } else if(mode==='multi'){
     window._currentProductDesc=qs('#productDesc').value.trim()||PELLET_PROFILES['8'];
     fetch(dataUrl).then(r=>r.blob()).then(blob=>{
@@ -1248,7 +1273,9 @@ size_match / size_detected: ${sizeCheckInstruction}`;
 
   async function callClaude(prompt) {
     let text=extractJson(await askClaude(prompt,true));
+    let viaRetry=false;
     if(!text){
+      viaRetry=true;
       /* FIX CRÍTICO: reintento único con prompt ultra-simple antes de rendirse */
       const simplePrompt=sizeMode==='single'
         ?`Cuenta cuántos discos circulares hay en esta imagen. Responde EXCLUSIVAMENTE con este JSON, sin ningún texto antes ni después: {"total": 0}. Sustituye el 0 por el número real que cuentes.`
@@ -1258,6 +1285,7 @@ size_match / size_detected: ${sizeCheckInstruction}`;
     }
     const r=JSON.parse(text);
     r.total=r.total||(r.small||0)+(r.medium||0)+(r.large||0);
+    r._viaRetry=viaRetry;
     return r;
   }
 
@@ -1285,6 +1313,7 @@ size_match / size_detected: ${sizeCheckInstruction}`;
        se muestra así y se avisa de revisar la foto (no se aparenta "alta"). */
     const confidence=['alta','media','baja'].includes(result.confidence)?result.confidence:null;
     if(!confidence)console.log('Respuesta SIN confidence válida (¿vino del reintento simple?):',JSON.stringify(result));
+    recordConfidenceOutcome('single',!confidence,!!result._viaRetry);
     const confLabel=confidence||'no disponible';
     const confColor=confidence==='alta'?'#3ecf8e':confidence==='baja'?'#f97316':'#f59e0b';
     setStatus('statusCount',`✓ ${total} detectados · Confianza: ${confLabel}${result.notes?' · '+result.notes:''}`);
@@ -1322,6 +1351,7 @@ size_match / size_detected: ${sizeCheckInstruction}`;
       confidence,notes:result.notes,albaran:albaranQty||null
       // ODOO - pendiente de implementar: odoo:buildOdooText()
     };
+    if(lastCaptureMethod)historyEntry.captureMethod=lastCaptureMethod;
     if(mismatchSize){
       /* NO se guarda todavía: espera a "Repetir con Xmm" (se descarta) o "Mantener". */
       lastVisionEntryId=null;
@@ -2153,6 +2183,14 @@ window.renderHistory=function(){
     const multiBadge=isMulti
       ?`<span style="font-size:11px;font-weight:700;color:var(--blue);border:1px solid var(--blue);padding:2px 9px;border-radius:10px">📷 Multifoto (${photoCount} fotos)</span>`
       :'';
+    /* v8.4: método de captura de las fotos únicas (para comparar cámara en
+       vivo vs archivo con datos reales). Las anteriores a v8.4 no lo
+       tienen: sin badge. */
+    const methodBadge=(!isMulti&&!isWeigh&&(e.captureMethod==='camera'||e.captureMethod==='file'))
+      ?(e.captureMethod==='camera'
+        ?`<span style="font-size:11px;font-weight:700;color:var(--green);border:1px solid var(--green);padding:2px 9px;border-radius:10px">📷 Cámara en vivo</span>`
+        :`<span style="font-size:11px;font-weight:700;color:var(--muted);border:1px solid var(--muted);padding:2px 9px;border-radius:10px">📁 Archivo subido</span>`)
+      :'';
     const chip=(text,corrected)=>`<span style="display:inline-block;font-size:12px;font-weight:600;padding:3px 8px;border-radius:8px;background:var(--surface2);border:0.5px solid ${corrected?'var(--orange)':'var(--border2)'};color:${corrected?'var(--orange)':'var(--text)'};margin:0 6px 6px 0">📷 ${text}</span>`;
     const photoBreakdownHtml=Array.isArray(e.photoBreakdown)&&e.photoBreakdown.length>0
       ?`<div style="margin-bottom:4px">
@@ -2176,6 +2214,7 @@ window.renderHistory=function(){
       ${notesShort?`<div style="font-size:11px;color:var(--hint);font-style:italic;margin-bottom:6px">${notesShort}</div>`:''}
       <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;align-items:center">
         ${multiBadge}
+        ${methodBadge}
         ${sizeBadge}
         ${e.albaran?`<span style="font-size:11px;color:var(--muted)">Albarán:${e.albaran}</span>`:''}
       </div>
@@ -2211,6 +2250,64 @@ window.copyHistEntry=function(i){
   navigator.clipboard.writeText(buildResultSummary(e)).then(()=>showToast('Copiado ✓'));
 };
 window.clearHistory=function(){if(!confirm('¿Borrar todo el historial?'))return;localStorage.removeItem('analysisHistory');updateHistoryBadge();renderHistory();renderWeighCounts();};
+
+/* ══ FRECUENCIA DE "CONFIANZA NO DISPONIBLE" (v8.4) ══
+   Persistente (localStorage) porque el log de depuración vive solo en
+   memoria. 'single' = análisis de foto única (donde sale "Confianza: no
+   disponible"); 'multi' = fotos de multifoto (allí se mostraba "media" en
+   silencio). viaRetry = de los single sin confianza, cuántos vinieron del
+   reintento simple ({"total":0}, que nunca la pide) — distingue "el
+   prompt del reintento no la pide" de "Claude omite el campo en el
+   prompt normal". Solo cuenta análisis que llegaron a dar resultado. */
+const CONF_STATS_KEY='confidenceStats';
+const CONF_WARN_PCT=15;      /* % a partir del cual se recomienda revisar el prompt del reintento */
+const CONF_MIN_SAMPLE=10;    /* con menos análisis el % no es fiable */
+function loadConfStats(){
+  const blank={single:{total:0,missing:0,viaRetry:0},multi:{total:0,missing:0},since:null};
+  try{
+    const s=JSON.parse(localStorage.getItem(CONF_STATS_KEY)||'null');
+    if(!s)return blank;
+    return {single:Object.assign(blank.single,s.single),multi:Object.assign(blank.multi,s.multi),since:s.since||null};
+  }catch(err){ return blank; }
+}
+function recordConfidenceOutcome(kind,missing,viaRetry){
+  const s=loadConfStats();
+  const k=kind==='multi'?'multi':'single';
+  s[k].total++;
+  if(missing){ s[k].missing++; if(k==='single'&&viaRetry)s.single.viaRetry++; }
+  if(!s.since)s.since=new Date().toLocaleDateString('es-ES');
+  try{ localStorage.setItem(CONF_STATS_KEY,JSON.stringify(s)); }catch(err){ /* sin espacio: el contador es secundario */ }
+  const c=s[k], pct=Math.round(100*c.missing/c.total);
+  console.log(`CONFIANZA ausente (${k}): ${c.missing} de ${c.total} análisis (${pct}%)${k==='single'?`, ${c.viaRetry} vía reintento simple`:''}`);
+  renderConfStats();
+}
+window.resetConfStats=function(){
+  if(!confirm('¿Reiniciar el contador de "confianza no disponible"?'))return;
+  try{ localStorage.removeItem(CONF_STATS_KEY); }catch(err){}
+  renderConfStats();
+};
+function renderConfStats(){
+  const el=qs('#confStatsInfo'); if(!el)return;
+  const s=loadConfStats(), a=s.single, m=s.multi;
+  if(a.total===0&&m.total===0){
+    el.innerHTML='<div style="font-size:12px;color:var(--muted)">Respuestas sin nivel de confianza: aún sin análisis registrados (el contador empieza en v8.4).</div>';
+    return;
+  }
+  const pct=a.total?Math.round(100*a.missing/a.total):0;
+  const high=a.total>=CONF_MIN_SAMPLE&&pct>CONF_WARN_PCT;
+  const color=high?'var(--orange)':'var(--text)';
+  const direct=a.missing-a.viaRetry;
+  el.innerHTML=`<div style="font-size:12px;line-height:1.7">
+    <div style="font-weight:700;margin-bottom:2px">Respuestas sin nivel de confianza (foto única)</div>
+    <div style="color:${color};font-weight:700;font-size:14px">${a.missing} de ${a.total} análisis (${pct}%)</div>
+    ${a.missing?`<div style="color:var(--muted)">${a.viaRetry} vinieron del reintento simple · ${direct} del prompt normal</div>`:''}
+    ${m.total?`<div style="color:var(--muted)">Multifoto: ${m.missing} de ${m.total} fotos sin confianza (se muestran como "media")</div>`:''}
+    ${a.total<CONF_MIN_SAMPLE?`<div style="color:var(--hint)">Pocas muestras (&lt;${CONF_MIN_SAMPLE}): el porcentaje aún no es fiable.</div>`:''}
+    ${high?`<div style="color:var(--orange);margin-top:4px">⚠️ Supera el ${CONF_WARN_PCT}% — conviene revisar el prompt del reintento para que también devuelva "confidence"${direct>a.viaRetry?' (y mirar por qué el prompt normal la omite)':''}.</div>`:''}
+    <div style="color:var(--hint);font-size:11px">Contando desde ${s.since||'—'}</div>
+    <button onclick="resetConfStats()" style="font-size:11px;padding:4px 10px;margin-top:6px">↺ Reiniciar contador</button>
+  </div>`;
+}
 
 /* ══ ESTADO DEL ENTRENAMIENTO (dashboard en Ajustes) ══ */
 function computeStats() {
@@ -2273,6 +2370,7 @@ window.renderStats = function renderStats() {
     </tbody>
   </table></div>`;
   el.innerHTML=table+sizes.map(s=>trainingBarHTML(s,stats[s].exampleCount)).join('');
+  renderConfStats();
 };
 
 /* ══ PWA ══ */
