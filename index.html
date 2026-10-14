@@ -183,7 +183,7 @@
     <h1>Pellet Counter <span class="ai-badge">✦ Claude AI</span></h1>
     <div style="display:flex;align-items:center;gap:10px">
       <div id="analyzeSpinner" class="spinner"></div>
-      <span class="ver">v8.6</span>
+      <span class="ver">v9.0</span>
     </div>
   </div>
   <div class="subbar" id="exCounts" style="border-bottom:none;padding-bottom:2px"></div>
@@ -536,6 +536,17 @@
         <div id="trainingDashboard"></div>
         <div id="confStatsInfo" style="margin-top:14px;padding-top:12px;border-top:0.5px solid var(--border)"></div>
       </div>
+      <div class="card" id="cvCard">
+        <p class="card-label">🧪 Experimental · visión clásica (OpenCV.js)</p>
+        <p style="font-size:11px;color:var(--hint);margin-bottom:10px;line-height:1.5">Investigación: <strong>no cambia ningún conteo</strong> ni se usa en el flujo normal. Cuenta los pellets sin IA (umbralización + círculos de Hough y área de blobs) y compara con el conteo verificado de tus ejemplos guardados y con el error histórico de Claude, tamaño por tamaño. OpenCV.js (≈10 MB) solo se descarga al pulsar el botón; se verifica su firma SHA-384, se ejecuta en un Worker aislado (sin acceso a tu API key ni al historial) y queda en caché para usarlo sin conexión.</p>
+        <button id="btnCvLoad" class="btn-primary" onclick="cvLoad()" style="width:100%;justify-content:center;margin-bottom:8px">⬇️ Cargar OpenCV.js</button>
+        <div id="cvStatus" style="font-size:12px;color:var(--muted);margin-bottom:8px;line-height:1.5"></div>
+        <button id="btnCvRun" onclick="cvRunExamples()" disabled style="width:100%;justify-content:center;margin-bottom:8px">▶️ Fase 1: comparar con mis ejemplos guardados</button>
+        <button id="btnCvPhoto" onclick="cvPickPhoto()" disabled style="width:100%;justify-content:center">📷 Probar con una foto (no se guarda nada)</button>
+        <input type="file" id="cvPhotoInput" accept="image/*" style="display:none" onchange="cvTestPhoto(event)">
+        <div id="cvPhotoResult"></div>
+        <div id="cvResults"></div>
+      </div>
       <div class="card">
         <p class="card-label">📐 Precisión verificada con datos reales</p>
         <p style="font-size:11px;color:var(--hint);margin-bottom:12px;line-height:1.5">Test físico con báscula real, 22-23/09/2026 (2 básculas distintas).</p>
@@ -569,8 +580,9 @@
       <div class="card">
         <p class="card-label">Acerca de</p>
         <div style="font-size:12px;color:var(--muted);line-height:2.2">
-          <div><strong style="color:var(--text)">Pellet Counter v8.6</strong></div>
+          <div><strong style="color:var(--text)">Pellet Counter v9.0</strong></div>
           <div>Motor IA · Claude Sonnet Vision</div>
+          <div>🧪 Experimental · conteo con visión clásica (OpenCV.js) para comparar con Claude, en Ajustes — no afecta a los conteos</div>
           <div>Multifoto · mismo prompt que foto única (antes sobrecontaba con un texto distinto) + log de lo que se envía</div>
           <div>Contador de confianza no disponible · ahora también desglosado por tamaño</div>
           <div>Visor de cámara a pantalla completa · se ve exactamente el fotograma que se captura</div>
@@ -694,13 +706,13 @@
   <canvas id="cameraCaptureCanvas" style="display:none"></canvas>
 </div>
 
-<!-- splash v8.6 -->
+<!-- splash v9.0 -->
 <div id="splash" style="position:fixed;inset:0;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:9999;transition:opacity 0.4s">
   <div style="font-size:44px;margin-bottom:14px">⬤</div>
   <div style="font-size:20px;font-weight:700;color:var(--text);letter-spacing:-0.5px">Pellet Counter</div>
   <div style="font-size:12px;color:var(--green);font-weight:600;margin-top:6px;display:flex;align-items:center;gap:8px">
     <span>✦ Claude AI</span><span style="color:var(--hint)">·</span>
-    <span style="font-family:monospace;color:var(--blue)">v8.6</span>
+    <span style="font-family:monospace;color:var(--blue)">v9.0</span>
   </div>
   <div style="margin-top:28px;width:60px;height:2px;background:var(--surface2);border-radius:2px;overflow:hidden">
     <div style="height:100%;background:linear-gradient(90deg,var(--blue),var(--green));border-radius:2px;animation:load 1.3s ease-out forwards"></div>
@@ -709,5 +721,6 @@
 <script>setTimeout(()=>{const s=document.getElementById('splash');s.style.opacity='0';setTimeout(()=>s.remove(),400);},1500);</script>
 
 <script src="js/app.js"></script>
+<script src="js/cv-experimental.js"></script>
 </body>
 </html>

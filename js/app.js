@@ -1,4 +1,10 @@
 /* ══════════════════════════════════════════
+   Pellet Counter v9.0 — investigación: visión clásica (OpenCV.js)
+   Módulo EXPERIMENTAL aparte (js/cv-experimental.js) + tarjeta "🧪" en
+   Ajustes. No toca el flujo normal ni ningún conteo. Único cambio en este
+   archivo: saveAsExample guarda también aiTotal (conteo original de Claude)
+   para poder comparar después foto por foto.
+   ══════════════════════════════════════════
    Pellet Counter v8.6 — multifoto con el mismo prompt que foto única
    (ver buildCountPrompt: sobreconteo sistemático en multifoto, 4mm y 8mm)
    + contador de "confianza no disponible" desglosado por tamaño
@@ -367,7 +373,7 @@
    Fix: JSON parser robusto
    ══════════════════════════════════════════ */
 
-const VERSION = 'v8.6';
+const VERSION = 'v9.0';
 
 /* ══ CAPTURA DE LOGS (v7.9.9) ══
    No hay DevTools a mano en un móvil real — esto guarda los últimos
@@ -1696,6 +1702,10 @@ window.saveAsExample = async function() {
       confidence: lastConfidence,
       product: (qs('#productDesc').value || '').slice(0, 60)
     };
+    /* v9.0: conteo ORIGINAL de Claude para esta foto (antes de ±1), para poder
+       comparar después, foto por foto, con la visión clásica (Ajustes → 🧪). */
+    const srcEntry = lastVisionEntryId ? loadHistory().find(e => e.id === lastVisionEntryId) : null;
+    if (srcEntry && typeof srcEntry.aiTotal === 'number') entry.aiTotal = srcEntry.aiTotal;
     let examples = getReferenceExamples();
     examples.push(entry);
     /* Tope POR TAMAÑO (v8.2): si se supera, se reemplaza el ejemplo más
