@@ -1,4 +1,18 @@
 /* ══════════════════════════════════════════
+   Pellet Counter v8.5 — visor de cámara a pantalla completa
+   (Surface Pro 9 5G: el visor de "Usar cámara" era pequeño y a veces se
+   colaba el dedo/mano en la foto)
+   - El visor ocupa toda la pantalla (Fullscreen API + 100% del viewport;
+     controles en columna lateral en apaisado). Antes: caja de ≤1100px.
+   - CAUSA probable de "el dedo sale en la foto aunque no lo veía": el
+     <video> usaba object-fit:cover, que RECORTA los bordes en la vista
+     previa, pero la captura usa el fotograma ENTERO. Ahora object-fit:
+     contain: lo que se ve es exactamente lo que se captura.
+   - Botón de PRUEBA "🧪 cámara del sistema (capture)" en escritorio, para
+     comprobar en el Surface si <input capture> abre la app Cámara. Lo
+     esperable en Chrome/Edge de escritorio es que ignore capture y abra
+     el selector de archivos; no se ha podido verificar desde aquí.
+   ══════════════════════════════════════════
    Pellet Counter v8.4 — método de captura en el historial + frecuencia de
    "confianza no disponible"
    (test controlado 12mm, 34 pellets reales, Surface Pro 9 5G: nativa
@@ -349,7 +363,7 @@
    Fix: JSON parser robusto
    ══════════════════════════════════════════ */
 
-const VERSION = 'v8.4';
+const VERSION = 'v8.5';
 
 /* ══ CAPTURA DE LOGS (v7.9.9) ══
    No hay DevTools a mano en un móvil real — esto guarda los últimos
@@ -1065,6 +1079,7 @@ function applyPlatformUploadUI() {
   if (isMobilePlatform) return; // HTML ya trae el flujo móvil visible por defecto
   const zm=qs('#uploadZoneMobile'); if(zm) zm.style.display='none';
   const cd=qs('#uploadChoiceDesktop'); if(cd) cd.style.display='flex';
+  const probe=qs('#captureProbeRow'); if(probe) probe.style.display='block';
   const zmm=qs('#uploadZoneMultiMobile'); if(zmm) zmm.style.display='none';
   const cdm=qs('#uploadChoiceMultiDesktop'); if(cdm) cdm.style.display='flex';
 }
@@ -1147,6 +1162,15 @@ window.openCameraModal = function(mode){
   errEl.style.display='none'; errEl.textContent='';
   if(btnSwitch) btnSwitch.style.display='none';
   modal.style.display='flex';
+  /* v8.5: pantalla completa real (oculta la barra del navegador) — como la
+     cámara de Windows. Requiere gesto de usuario (esta función se llama
+     desde un click) y puede ser rechazado: entonces el visor sigue
+     ocupando toda la ventana. Esc sale de pantalla completa sin cerrar. */
+  try{
+    if(modal.requestFullscreen&&!document.fullscreenElement){
+      const p=modal.requestFullscreen(); if(p&&p.catch)p.catch(err=>console.log('requestFullscreen rechazado:',err&&err.name));
+    }
+  }catch(err){ console.log('requestFullscreen falló:',err&&err.name); }
   if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
     errEl.textContent='⚠️ Tu navegador no soporta acceso a la cámara — usa 📁 Subir desde archivo';
     errEl.style.display='block';
@@ -1168,6 +1192,7 @@ window.closeCameraModal = function(){
   if(cameraStream){cameraStream.getTracks().forEach(t=>t.stop());cameraStream=null;}
   const video=qs('#cameraVideo'); if(video) video.srcObject=null;
   const modal=qs('#cameraModal'); if(modal) modal.style.display='none';
+  try{ if(document.fullscreenElement&&document.exitFullscreen){ const p=document.exitFullscreen(); if(p&&p.catch)p.catch(()=>{}); } }catch(err){}
   cameraTargetMode=null; cameraDevices=[]; cameraDeviceIndex=0;
 };
 

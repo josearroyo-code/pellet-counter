@@ -139,10 +139,20 @@
       .grav-left{flex:0 0 48%;max-width:48%;}
       .grav-right{flex:0 0 48%;max-width:48%;}
       #historyList{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
-      /* cámara nativa (v8.1): preview a la izquierda, controles a la derecha */
-      #cameraLayout{flex-direction:row;align-items:stretch;max-width:1300px;}
-      #cameraPreviewWrap{flex:0 0 58%;max-width:58%;}
-      #cameraRight{flex:0 0 38%;max-width:38%;justify-content:center;}
+    }
+
+    /* cámara (v8.1, visor a pantalla completa en v8.5): apaisado → visor
+       ocupando todo el alto, controles en una columna a la derecha. En
+       vertical el visor ocupa todo y los controles van en barra inferior. */
+    /* (la dirección/anchos van aquí y NO inline: un style="" inline ganaría
+       a estas reglas — así estaba antes y por eso el apaisado de v8.1 no se aplicaba) */
+    #cameraLayout{flex-direction:column;}
+    #cameraRight{flex:0 0 auto;width:100%;}
+    @media (orientation:landscape){
+      #cameraLayout{flex-direction:row;}
+      #cameraRight{flex:0 0 230px;width:230px;max-width:230px;justify-content:center;overflow-y:auto;}
+      #cameraButtons{flex-direction:column-reverse;}
+      #cameraButtons button{width:100%;}
     }
 
     /* ── Surface Pro (pantalla 13", >1200px landscape): panel de foto
@@ -173,7 +183,7 @@
     <h1>Pellet Counter <span class="ai-badge">✦ Claude AI</span></h1>
     <div style="display:flex;align-items:center;gap:10px">
       <div id="analyzeSpinner" class="spinner"></div>
-      <span class="ver">v8.4</span>
+      <span class="ver">v8.5</span>
     </div>
   </div>
   <div class="subbar" id="exCounts" style="border-bottom:none;padding-bottom:2px"></div>
@@ -309,6 +319,12 @@
         <button onclick="startSinglePhoto('camera')" style="flex:1;justify-content:center;padding:20px 8px;flex-direction:column;gap:6px">
           <span style="font-size:22px">📷</span><span style="font-size:12px">Usar cámara</span>
         </button>
+      </div>
+      <!-- v8.5 PRUEBA: ¿el navegador de este equipo abre la app Cámara del sistema con capture?
+           (en escritorio lo normal es que lo ignore y abra el selector de archivos). -->
+      <div id="captureProbeRow" style="display:none;margin:-4px 0 12px">
+        <button onclick="startSinglePhoto('fileCountCapture')" style="width:100%;justify-content:center;padding:10px 8px;font-size:12px;border-style:dashed">🧪 Prueba: cámara del sistema (capture)</button>
+        <input type="file" id="fileCountCapture" accept="image/*" capture="environment" style="display:none" onchange="loadCount(event)">
       </div>
 
       <div class="status-bar" id="statusCount"></div>
@@ -553,8 +569,9 @@
       <div class="card">
         <p class="card-label">Acerca de</p>
         <div style="font-size:12px;color:var(--muted);line-height:2.2">
-          <div><strong style="color:var(--text)">Pellet Counter v8.4</strong></div>
+          <div><strong style="color:var(--text)">Pellet Counter v8.5</strong></div>
           <div>Motor IA · Claude Sonnet Vision</div>
+          <div>Visor de cámara a pantalla completa · se ve exactamente el fotograma que se captura</div>
           <div>Historial · cada foto única indica si fue "📷 Cámara en vivo" o "📁 Archivo subido"</div>
           <div>Estado del entrenamiento · contador de respuestas sin nivel de confianza, con aviso si supera el 15%</div>
           <div>Cámara en 4K · resolución ideal 3840×2160 (con fallback) y la real visible en el modal y en el log</div>
@@ -649,18 +666,24 @@
 </div>
 
 <!-- Cámara nativa Windows/desktop/Surface (v8.1) -->
-<div id="cameraModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:9998;align-items:center;justify-content:center;padding:16px">
-  <div id="cameraLayout" style="display:flex;flex-direction:column;gap:16px;width:100%;max-width:1100px;align-items:center">
-    <div id="cameraPreviewWrap" style="width:100%;flex:1;min-height:400px;background:#000;border-radius:var(--radius-lg);overflow:hidden;display:flex;align-items:center;justify-content:center">
-      <video id="cameraVideo" autoplay playsinline muted style="width:100%;height:100%;object-fit:cover"></video>
+<!-- v8.5: visor a pantalla completa. Antes: caja de ≤1100px con object-fit:cover,
+     que RECORTABA los bordes del vídeo en la vista previa aunque la captura
+     usa el fotograma entero → un dedo/mano en el borde salía en la foto sin
+     verse en el visor. Ahora object-fit:contain (se ve exactamente lo que se
+     captura) y el visor ocupa toda la pantalla; controles en columna lateral
+     (apaisado) o barra inferior (vertical). -->
+<div id="cameraModal" style="display:none;position:fixed;inset:0;background:#000;z-index:9998;align-items:stretch;justify-content:stretch;padding:0">
+  <div id="cameraLayout" style="display:flex;gap:0;width:100%;height:100%">
+    <div id="cameraPreviewWrap" style="flex:1 1 auto;min-height:0;min-width:0;background:#000;overflow:hidden;display:flex;align-items:center;justify-content:center">
+      <video id="cameraVideo" autoplay playsinline muted style="width:100%;height:100%;object-fit:contain"></video>
     </div>
-    <div id="cameraRight" style="width:100%;max-width:360px;display:flex;flex-direction:column;gap:12px">
+    <div id="cameraRight" style="display:flex;flex-direction:column;gap:10px;padding:12px 16px calc(12px + env(safe-area-inset-bottom,0px));background:#111;box-sizing:border-box">
       <div id="cameraError" class="warn" style="display:none;text-align:center;margin-bottom:0"></div>
       <!-- v8.3: resolución REAL que entrega la cámara (también en el log de Ajustes) -->
       <div id="cameraResInfo" style="font-size:12px;color:var(--muted);text-align:center"></div>
       <!-- Solo visible si hay más de una cámara disponible (v8.1 patch) -->
       <button id="btnSwitchCamera" onclick="switchCamera()" style="display:none;width:100%;justify-content:center">🔄 Cambiar cámara</button>
-      <div style="display:flex;gap:12px">
+      <div id="cameraButtons" style="display:flex;gap:12px">
         <button onclick="closeCameraModal()" style="flex:1;justify-content:center;padding:14px;color:var(--orange);border-color:var(--orange)">✕ Cancelar</button>
         <button id="btnCapturePhoto" onclick="captureCameraPhoto()" class="btn-success" style="flex:1;justify-content:center;padding:14px;font-size:15px">📸 Capturar foto</button>
       </div>
@@ -669,13 +692,13 @@
   <canvas id="cameraCaptureCanvas" style="display:none"></canvas>
 </div>
 
-<!-- splash v8.4 -->
+<!-- splash v8.5 -->
 <div id="splash" style="position:fixed;inset:0;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:9999;transition:opacity 0.4s">
   <div style="font-size:44px;margin-bottom:14px">⬤</div>
   <div style="font-size:20px;font-weight:700;color:var(--text);letter-spacing:-0.5px">Pellet Counter</div>
   <div style="font-size:12px;color:var(--green);font-weight:600;margin-top:6px;display:flex;align-items:center;gap:8px">
     <span>✦ Claude AI</span><span style="color:var(--hint)">·</span>
-    <span style="font-family:monospace;color:var(--blue)">v8.4</span>
+    <span style="font-family:monospace;color:var(--blue)">v8.5</span>
   </div>
   <div style="margin-top:28px;width:60px;height:2px;background:var(--surface2);border-radius:2px;overflow:hidden">
     <div style="height:100%;background:linear-gradient(90deg,var(--blue),var(--green));border-radius:2px;animation:load 1.3s ease-out forwards"></div>
