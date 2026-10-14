@@ -1,4 +1,8 @@
 /* ══════════════════════════════════════════
+   Pellet Counter v8.6 — multifoto con el mismo prompt que foto única
+   (ver buildCountPrompt: sobreconteo sistemático en multifoto, 4mm y 8mm)
+   + contador de "confianza no disponible" desglosado por tamaño
+   ══════════════════════════════════════════
    Pellet Counter v8.5 — visor de cámara a pantalla completa
    (Surface Pro 9 5G: el visor de "Usar cámara" era pequeño y a veces se
    colaba el dedo/mano en la foto)
@@ -363,7 +367,7 @@
    Fix: JSON parser robusto
    ══════════════════════════════════════════ */
 
-const VERSION = 'v8.5';
+const VERSION = 'v8.6';
 
 /* ══ CAPTURA DE LOGS (v7.9.9) ══
    No hay DevTools a mano en un móvil real — esto guarda los últimos
@@ -791,6 +795,60 @@ window.addMultiFoto = function(e) {
   e.target.value='';
 };
 
+/* v8.6: UN solo constructor del prompt de conteo para foto única y multifoto.
+   Antes eran dos textos escritos a mano y distintos; en multifoto el modelo
+   sobrecontaba (4mm: +10/+8 con la misma foto que daba 52/52 en foto única;
+   8mm: +3 y +3 en fotos de 23 y 17). Revisado el código: la IMAGEN viaja
+   igual en ambas rutas (base64 del archivo original, o del JPEG del canvas
+   de la cámara; sin redimensionar — EXAMPLE_MAX_DIM solo afecta a los
+   ejemplos few-shot guardados), y modelo, max_tokens y few-shot también.
+   La única diferencia real era el PROMPT: multifoto añadía "esta foto es
+   uno de varios grupos en los que se ha dividido un bote más grande… no
+   asumas un rango de cantidad… aunque sean más o menos de los esperados"
+   y una nota de few-shot con otra redacción. Ese encuadre puede sesgar
+   hacia contar de más, y el signo cuadra: multifoto sobrecuenta mientras
+   foto única en 8mm tiende a infracontar. Ahora multifoto usa el MISMO
+   texto que foto única; lo único propio de multifoto es el aviso "NO
+   condensadores…" (v7.9.5, el modelo los confundía en multifoto).
+   HIPÓTESIS sin confirmar con la API desde aquí: se valida repitiendo el
+   test de 8mm (y comparando la misma foto por foto única vs multifoto). */
+const MULTI_ONLY_GUARD=`IMPORTANTE: Estás contando electrodos de disco de plata sinterizada, NO condensadores cerámicos, NO termistores, NO varistores. Son discos metálicos con un hilo fino.
+
+`;
+function buildFewShotNote(count){
+  return count>0
+    ?`\nNOTA: antes de la foto a analizar se incluyen ${count} imagen(es) de referencia, cada una con su conteo ya confirmado indicado por texto. Son solo contexto de calibración de escala/densidad — NO las cuentes. La imagen que debes contar es la ÚLTIMA imagen, la que aparece justo antes de este texto.\n`
+    :'';
+}
+function buildCountPrompt(o){
+  return `Eres un sistema experto de conteo industrial de precisión máxima.
+
+${o.multi?MULTI_ONLY_GUARD:''}OBJETO A CONTAR: ${o.productDesc}
+
+${o.sizeInstruction}
+${o.fewShotNote}
+REGLAS ABSOLUTAS:
+1. Cuenta ÚNICAMENTE los objetos descritos. Ignora hilos, cables, algodón, fondo, sombras.
+2. Divide mentalmente la imagen en una cuadrícula de filas y columnas, cuenta cada celda por separado y luego suma el total.
+3. Si los objetos se tocan o solapan, nunca los agrupes como uno solo — cuenta cada uno individualmente.
+4. Incluye objetos parcialmente visibles si se ve más del 50%.
+5. Esta cuenta verifica albaranes comerciales — la precisión es crítica económicamente.
+6. Sé honesto con tu propia incertidumbre: si los objetos están muy amontonados, solapados, mal iluminados o hay cualquier duda razonable sobre el conteo exacto, responde confidence "media" o "baja" en vez de "alta".
+
+RESPONDE EXCLUSIVAMENTE CON ESTE JSON. CERO palabras antes o después. CERO markdown:
+{"small":0,"medium":0,"large":0,"total":0,"confidence":"alta","overlap":false,"size_match":true,"size_detected":null,"notes":null}
+
+Sustituye los 0 por los conteos reales. confidence: "alta" "media" o "baja". notes: string o null.
+overlap: true SOLO si hay pellets apilados o muy solapados que impiden contarlos uno a uno con fiabilidad; false si están separados o apenas se rozan.
+size_match / size_detected: ${o.sizeCheckInstruction}`;
+}
+
+/* Diagnóstico para comparar rutas en Ajustes → 🔍 Ver último log: lo que se
+   envía realmente (ruta, tipo y tamaño de imagen, nº de ejemplos, largo del prompt). */
+function logAnalysisSend(route,mime,base64,fewShotCount,prompt){
+  console.log(`ENVÍO IA [${route}]: ${mime}, imagen ${base64.length} car. (~${(base64.length*0.75/1048576).toFixed(2)} MB), few-shot ${fewShotCount}, prompt ${prompt.length} car.`);
+}
+
 async function analyzeOneFoto(entry) {
   const apiKey=getApiKey();
   if(!apiKey){entry.analyzing=false;entry.result={total:0,aiTotal:0,confidence:'baja',notes:'Sin API key'};renderMultiList();updateMultiTotal();return;}
@@ -806,9 +864,7 @@ async function analyzeOneFoto(entry) {
   const productDesc=window._currentProductDesc||qs('#productDesc').value.trim()||PELLET_PROFILES['8'];
   const singleSize=qs('#singleSize').value;
   const fewShotCount=getReferenceExamples().filter(e=>e.size===singleSize).slice(-2).length;
-  const fewShotNote=fewShotCount>0
-    ?`\nNOTA: antes de la foto a analizar se incluyen ${fewShotCount} imagen(es) de referencia con su conteo ya confirmado por texto. Son solo contexto de calibración — NO las cuentes. La imagen a contar es la ÚLTIMA, justo antes de este texto.\n`
-    :'';
+  const fewShotNote=buildFewShotNote(fewShotCount);
   /* v7.9.9 FIX REAL: el usuario aportó un A/B con datos reales —
      la MISMA foto daba 52/52 exacto por foto única y 62/52 (+10) por
      multifoto. Eso descarta que el problema fuera los pellets o el
@@ -825,32 +881,13 @@ async function analyzeOneFoto(entry) {
      nunca al envío para análisis; ambas rutas ya mandaban la imagen
      en su resolución original. Verificado leyendo el código, no
      solo con los console.log de abajo.) */
-  const prompt=`Eres un sistema experto de conteo industrial de precisión máxima.
-
-IMPORTANTE: Estás contando electrodos de disco de plata sinterizada, NO condensadores cerámicos, NO termistores, NO varistores. Son discos metálicos con un hilo fino.
-
-OBJETO A CONTAR: ${productDesc}
-
-Esta foto es uno de varios grupos en los que se ha dividido un bote más grande para contar con más precisión. Cuenta ÚNICAMENTE los pellets visibles en ESTA foto — no asumas un rango de cantidad, cuenta exactamente lo que ves aunque sean más o menos de los esperados.
-
-Todos son del mismo tamaño (${singleSize}mm). Devuelve small=0, large=0 y pon el total en medium.
-${fewShotNote}
-REGLAS ABSOLUTAS:
-1. Cuenta ÚNICAMENTE los objetos descritos. Ignora hilos, cables, algodón, fondo, sombras.
-2. Divide mentalmente la imagen en una cuadrícula de filas y columnas, cuenta cada celda por separado y luego suma el total.
-3. Si los objetos se tocan o solapan, nunca los agrupes como uno solo — cuenta cada uno individualmente.
-4. Incluye objetos parcialmente visibles si se ve más del 50%.
-5. Esta cuenta verifica albaranes comerciales — la precisión es crítica económicamente.
-6. Sé honesto con tu propia incertidumbre: si los objetos están muy amontonados, solapados, mal iluminados o hay cualquier duda razonable sobre el conteo exacto, responde confidence "media" o "baja" en vez de "alta".
-
-RESPONDE EXCLUSIVAMENTE CON ESTE JSON, CERO texto adicional:
-{"small":0,"medium":0,"large":0,"total":0,"confidence":"alta","size_match":true,"size_detected":null,"notes":null}
-
-Sustituye los 0 por los conteos reales. confidence: "alta" "media" o "baja". notes: string o null.
-size_match / size_detected: Compara el tamaño visual de los discos con el tamaño declarado (${singleSize}mm). Si no coincide, pon size_match=false e indica en size_detected el tamaño que parecen ("4mm", "8mm" o "12mm"). Solo pon size_match=false si estás razonablemente seguro; ante la duda pon size_match=true y size_detected=null.`;
+  const sizeInstruction=`Todos los objetos son del mismo tamaño (${singleSize}mm). Devuelve small=0, large=0 y pon el total en medium.`;
+  const sizeCheckInstruction=`Compara el tamaño visual de los discos con el tamaño declarado (${singleSize}mm). Si no coincide, pon size_match=false e indica en size_detected el tamaño que parecen ("4mm", "8mm" o "12mm"). Solo pon size_match=false si estás razonablemente seguro; ante la duda pon size_match=true y size_detected=null.`;
+  const prompt=buildCountPrompt({productDesc,sizeInstruction,fewShotNote,sizeCheckInstruction,multi:true});
 
   console.log('MULTIFOTO PROMPT:', prompt.slice(0, 200));
   console.log('MULTIFOTO IMAGE SIZE:', entry.base64.length);
+  logAnalysisSend('multifoto',entry.mime,entry.base64,fewShotCount,prompt);
 
   /* FIX CRÍTICO v7.9.4: mismo reintento con prompt ultra-simple que
      runCountAI ya tenía para foto única — antes analyzeOneFoto solo
@@ -895,7 +932,7 @@ size_match / size_detected: Compara el tamaño visual de los discos con el tama�
     }
     const validConf=['alta','media','baja'].includes(r.confidence);
     if(!validConf)console.log('[multifoto] Respuesta SIN confidence válida (se muestra "media"):',JSON.stringify(r));
-    recordConfidenceOutcome('multi',!validConf,false);
+    recordConfidenceOutcome('multi',!validConf,false,singleSize);
     entry.result={total,aiTotal:total,confidence:validConf?r.confidence:'media',notes:r.notes,sizeWarn,sizeDeclared:singleSize};
     const over=multiPhotoOverLimit(entry.result);
     if(over)showToast(`⚠️ Una foto tiene ${total} uds: supera el máximo recomendado (${over.lim}) para ${over.size}mm`,true);
@@ -1246,33 +1283,13 @@ async function runCountAI() {
     ?`Compara el tamaño visual de los discos con el tamaño declarado (${singleSize}mm). Si no coincide, pon size_match=false e indica en size_detected el tamaño que parecen ("4mm", "8mm" o "12mm"). Solo pon size_match=false si estás razonablemente seguro; ante la duda pon size_match=true y size_detected=null.`
     :`No aplica en modo clasificar: pon size_match=true y size_detected=null.`;
   const fewShotCount=sizeMode==='single'?getReferenceExamples().filter(e=>e.size===singleSize).slice(-2).length:0;
-  const fewShotNote=fewShotCount>0
-    ?`\nNOTA: antes de la foto a analizar se incluyen ${fewShotCount} imagen(es) de referencia, cada una con su conteo ya confirmado indicado por texto. Son solo contexto de calibración de escala/densidad — NO las cuentes. La imagen que debes contar es la ÚLTIMA imagen, la que aparece justo antes de este texto.\n`
-    :'';
+  const fewShotNote=buildFewShotNote(fewShotCount);
 
-  const prompt=`Eres un sistema experto de conteo industrial de precisión máxima.
-
-OBJETO A CONTAR: ${productDesc}
-
-${sizeInstruction}
-${fewShotNote}
-REGLAS ABSOLUTAS:
-1. Cuenta ÚNICAMENTE los objetos descritos. Ignora hilos, cables, algodón, fondo, sombras.
-2. Divide mentalmente la imagen en una cuadrícula de filas y columnas, cuenta cada celda por separado y luego suma el total.
-3. Si los objetos se tocan o solapan, nunca los agrupes como uno solo — cuenta cada uno individualmente.
-4. Incluye objetos parcialmente visibles si se ve más del 50%.
-5. Esta cuenta verifica albaranes comerciales — la precisión es crítica económicamente.
-6. Sé honesto con tu propia incertidumbre: si los objetos están muy amontonados, solapados, mal iluminados o hay cualquier duda razonable sobre el conteo exacto, responde confidence "media" o "baja" en vez de "alta".
-
-RESPONDE EXCLUSIVAMENTE CON ESTE JSON. CERO palabras antes o después. CERO markdown:
-{"small":0,"medium":0,"large":0,"total":0,"confidence":"alta","overlap":false,"size_match":true,"size_detected":null,"notes":null}
-
-Sustituye los 0 por los conteos reales. confidence: "alta" "media" o "baja". notes: string o null.
-overlap: true SOLO si hay pellets apilados o muy solapados que impiden contarlos uno a uno con fiabilidad; false si están separados o apenas se rozan.
-size_match / size_detected: ${sizeCheckInstruction}`;
+  const prompt=buildCountPrompt({productDesc,sizeInstruction,fewShotNote,sizeCheckInstruction});
 
   console.log('SINGLE PROMPT:', prompt.slice(0, 200));
   console.log('SINGLE IMAGE SIZE:', lastImageBase64.length);
+  logAnalysisSend('foto única',lastImageMime,lastImageBase64,fewShotCount,prompt);
 
   async function askClaude(promptText, includeFewShot) {
     const fewShot=(includeFewShot&&sizeMode==='single')?buildFewShotBlocks(singleSize):[];
@@ -1338,7 +1355,7 @@ size_match / size_detected: ${sizeCheckInstruction}`;
        se muestra así y se avisa de revisar la foto (no se aparenta "alta"). */
     const confidence=['alta','media','baja'].includes(result.confidence)?result.confidence:null;
     if(!confidence)console.log('Respuesta SIN confidence válida (¿vino del reintento simple?):',JSON.stringify(result));
-    recordConfidenceOutcome('single',!confidence,!!result._viaRetry);
+    recordConfidenceOutcome('single',!confidence,!!result._viaRetry,sizeMode==='single'?singleSize:'mix');
     const confLabel=confidence||'no disponible';
     const confColor=confidence==='alta'?'#3ecf8e':confidence==='baja'?'#f97316':'#f59e0b';
     setStatus('statusCount',`✓ ${total} detectados · Confianza: ${confLabel}${result.notes?' · '+result.notes:''}`);
@@ -2288,18 +2305,22 @@ const CONF_STATS_KEY='confidenceStats';
 const CONF_WARN_PCT=15;      /* % a partir del cual se recomienda revisar el prompt del reintento */
 const CONF_MIN_SAMPLE=10;    /* con menos análisis el % no es fiable */
 function loadConfStats(){
-  const blank={single:{total:0,missing:0,viaRetry:0},multi:{total:0,missing:0},since:null};
+  const blank={single:{total:0,missing:0,viaRetry:0},multi:{total:0,missing:0},bySize:{},since:null};
   try{
     const s=JSON.parse(localStorage.getItem(CONF_STATS_KEY)||'null');
     if(!s)return blank;
-    return {single:Object.assign(blank.single,s.single),multi:Object.assign(blank.multi,s.multi),since:s.since||null};
+    return {single:Object.assign(blank.single,s.single),multi:Object.assign(blank.multi,s.multi),bySize:s.bySize||{},since:s.since||null};
   }catch(err){ return blank; }
 }
-function recordConfidenceOutcome(kind,missing,viaRetry){
+function recordConfidenceOutcome(kind,missing,viaRetry,size){
   const s=loadConfStats();
   const k=kind==='multi'?'multi':'single';
   s[k].total++;
   if(missing){ s[k].missing++; if(k==='single'&&viaRetry)s.single.viaRetry++; }
+  /* v8.6: desglose por tamaño (single + multi juntos: es el tamaño de la
+     foto lo que interesa). Los análisis anteriores a v8.6 no se pueden
+     repartir: solo cuentan en los totales. */
+  if(size){ const b=s.bySize[size]||(s.bySize[size]={total:0,missing:0}); b.total++; if(missing)b.missing++; }
   if(!s.since)s.since=new Date().toLocaleDateString('es-ES');
   try{ localStorage.setItem(CONF_STATS_KEY,JSON.stringify(s)); }catch(err){ /* sin espacio: el contador es secundario */ }
   const c=s[k], pct=Math.round(100*c.missing/c.total);
@@ -2326,6 +2347,7 @@ function renderConfStats(){
     <div style="font-weight:700;margin-bottom:2px">Respuestas sin nivel de confianza (foto única)</div>
     <div style="color:${color};font-weight:700;font-size:14px">${a.missing} de ${a.total} análisis (${pct}%)</div>
     ${a.missing?`<div style="color:var(--muted)">${a.viaRetry} vinieron del reintento simple · ${direct} del prompt normal</div>`:''}
+    ${(()=>{const keys=['4','8','12','mix'].filter(k=>s.bySize[k]&&s.bySize[k].total);if(!keys.length)return '';const tot=keys.reduce((n,k)=>n+s.bySize[k].total,0);const sub=a.total+m.total-tot;return `<div style="color:var(--muted)">Por tamaño (single+multi): ${keys.map(k=>`${k==='mix'?'clasificar':k+'mm'} ${s.bySize[k].missing}/${s.bySize[k].total} (${Math.round(100*s.bySize[k].missing/s.bySize[k].total)}%)`).join(' · ')}${sub>0?` <span style="color:var(--hint)">· ${sub} análisis previos a v8.6 sin tamaño registrado</span>`:''}</div>`;})()}
     ${m.total?`<div style="color:var(--muted)">Multifoto: ${m.missing} de ${m.total} fotos sin confianza (se muestran como "media")</div>`:''}
     ${a.total<CONF_MIN_SAMPLE?`<div style="color:var(--hint)">Pocas muestras (&lt;${CONF_MIN_SAMPLE}): el porcentaje aún no es fiable.</div>`:''}
     ${high?`<div style="color:var(--orange);margin-top:4px">⚠️ Supera el ${CONF_WARN_PCT}% — conviene revisar el prompt del reintento para que también devuelva "confidence"${direct>a.viaRetry?' (y mirar por qué el prompt normal la omite)':''}.</div>`:''}
