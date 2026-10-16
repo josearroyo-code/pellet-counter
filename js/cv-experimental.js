@@ -312,14 +312,17 @@
   /* Error histórico de Claude por tamaño (solo fotos únicas): |aiTotal − total| sobre TODOS los
      análisis, no solo los corregidos. Si el usuario no corrigió, se asume que acertó. */
   function claudeHistoryBySize() {
+    /* v9.1: mismo filtro que "Estado del entrenamiento": SOLO foto única (los ejemplos son fotos
+       únicas) y el PERIODO elegido en Ajustes (por defecto, desde la línea base) — así la
+       comparación con CV no mezcla pruebas anteriores a los arreglos. */
     const out = { '4': [], '8': [], '12': [] };
-    let hist = []; try { hist = JSON.parse(localStorage.getItem('analysisHistory') || '[]'); } catch (e) { /* vacío */ }
-    hist.forEach(e => {
-      if (e.method === 'weigh' || e.aiTotal === undefined || Array.isArray(e.photoBreakdown) || /^Multifoto \d+ fotos/.test(e.notes || '')) return;
-      const used = [e.size4 > 0 ? '4' : null, e.size8 > 0 ? '8' : null, e.size12 > 0 ? '12' : null].filter(Boolean);
-      if (used.length === 1) out[used[0]].push(e.aiTotal - e.total);
-    });
+    const by = window.statsHistoryEntries({ kind: 'single' });
+    ['4', '8', '12'].forEach(s => by[s].forEach(e => out[s].push(e.aiTotal - e.total)));
     return out;
+  }
+  function claudeScopeText() {
+    const base = new Date(window.getStatsBaseline()).toLocaleString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+    return window.getStatsScope() === 'baseline' ? `desde la línea base (${base}), solo foto única` : 'todo el historial, solo foto única';
   }
   function stats(errs) {
     if (!errs.length) return null;
@@ -357,17 +360,17 @@
     const th = 'padding:4px 6px;text-align:left;border-bottom:1px solid var(--border2);font-size:11px';
     const td = 'padding:4px 6px;border-top:0.5px solid var(--border);font-size:11px';
     let html = `<div style="font-size:12px;font-weight:700;margin:12px 0 6px">Error de conteo por método (estimado − verificado)</div>
-      <div style="font-size:11px;color:var(--hint);margin-bottom:6px">Formato: error absoluto medio (sesgo) · aciertos ±2 / n. Menor error absoluto = mejor.</div>
-      <div style="overflow-x:auto"><table style="border-collapse:collapse;min-width:300px;width:100%"><thead><tr><th style="${th}">Método</th>${sizes.map(s => `<th style="${th}">${s}mm</th>`).join('')}</tr></thead><tbody>`;
-    const cell = st => st ? `<b>${f1(st.mae)}</b> (${sgn(st.bias)}) · ${st.within2}/${st.n}` : '<span style="color:var(--hint)">—</span>';
+      <div style="font-size:11px;color:var(--hint);margin-bottom:6px">Formato: error absoluto medio (sesgo) · aciertos ±2 / n. Menor error absoluto = mejor. <b>Cada columna es un tamaño independiente: no hay ningún promedio combinado</b> (los tamaños tienen muy distinto nº de muestras). * = menos de 5 muestras, poco fiable.</div>
+      <div style="overflow-x:auto"><table style="border-collapse:collapse;min-width:300px;width:100%"><thead><tr><th style="${th}">Método</th>${sizes.map(s => `<th style="${th}">${s}mm <span style="font-weight:400;color:var(--hint)">(${rows.filter(x => x.size === s && !x.error).length} ejemplos)</span></th>`).join('')}</tr></thead><tbody>`;
+    const cell = st => st ? `<b>${f1(st.mae)}</b> (${sgn(st.bias)}) · ${st.within2}/${st.n}${st.n < 5 ? ' <span style="color:var(--orange)">*</span>' : ''}` : '<span style="color:var(--hint)">—</span>';
     const per = {};
     METHODS.forEach(m => {
       sizes.forEach(s => { per[m.key + s] = stats(rows.filter(x => x.size === s && !x.error).map(x => x.r.counts[m.key] - x.truth)); });
       html += `<tr><td style="${td}">${m.label}</td>${sizes.map(s => `<td style="${td}">${cell(per[m.key + s])}</td>`).join('')}</tr>`;
     });
     const cl = {}; sizes.forEach(s => { cl[s] = stats(claude[s]); });
-    html += `<tr><td style="${td};color:var(--blue);font-weight:700">Claude (historial)</td>${sizes.map(s => `<td style="${td}">${cell(cl[s])}</td>`).join('')}</tr></tbody></table></div>
-      <div style="font-size:11px;color:var(--hint);line-height:1.5;margin:6px 0 10px">«Claude (historial)» = todas tus fotos únicas de ese tamaño en el Historial (no exactamente las mismas fotos de los ejemplos: los ejemplos no guardaban el conteo original de Claude; los guardados desde v9.0 sí). Si no corregiste un conteo se asume que acertó. Los ejemplos están reducidos a ≤400 px, lo que penaliza sobre todo a 4mm.</div>`;
+    html += `<tr><td style="${td};color:var(--blue);font-weight:700">Claude (historial, ${claudeScopeText()})</td>${sizes.map(s => `<td style="${td}">${cell(cl[s])}</td>`).join('')}</tr></tbody></table></div>
+      <div style="font-size:11px;color:var(--hint);line-height:1.5;margin:6px 0 10px">«Claude (historial)» = tus fotos únicas de ese tamaño en el Historial dentro del periodo elegido en Ajustes → Estado del entrenamiento (no exactamente las mismas fotos de los ejemplos: los ejemplos no guardaban el conteo original de Claude; los guardados desde v9.0 sí). Si no corregiste un conteo se asume que acertó. Los ejemplos están reducidos a ≤400 px, lo que penaliza sobre todo a 4mm.</div>`;
     /* tarjetas por ejemplo */
     html += '<div style="font-size:12px;font-weight:700;margin:6px 0">Revisión visual (amarillo = contornos de blobs · verde = círculos de Hough 45%)</div><div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px">';
     rows.forEach((x, i) => {
@@ -390,7 +393,8 @@
     const out = {
       version: (typeof VERSION !== 'undefined' ? VERSION : null), lib: CV_LIB_URL, maxSide: CV_MAX_SIDE,
       examples: lastRun.map(x => x.error ? { size: x.size, truth: x.truth, error: x.error } : { size: x.size, truth: x.truth, claudeAI: x.claude, rEstPx: Math.round(x.r.rEst * 10) / 10, rSource: x.r.rSource, bgBright: x.r.bgBright, components: x.r.nComp, counts: x.r.counts, houghRawBeforeMask: x.r.houghRaw, houghParam2: x.r.p2Used, imgPx: [x.r.w, x.r.h], ms: x.r.ms }),
-      claudeHistoryErrors: claude
+      claudeHistoryErrors: claude,
+      claudeHistoryScope: claudeScopeText()
     };
     navigator.clipboard.writeText(JSON.stringify(out, null, 1)).then(() => { if (window.showToast) showToast('Resultados copiados ✓'); });
   };

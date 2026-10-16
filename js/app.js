@@ -1,4 +1,20 @@
 /* ══════════════════════════════════════════
+   Pellet Counter v9.1 — antes de la Fase 1 de CV: métricas limpias
+   1 REINTENTO SIMPLE: ahora pide también "confidence" (antes solo
+          {"total":0}; 13 de 15 análisis, el 100% de los "no disponible",
+          salían de ahí). Además se registra POR QUÉ la 1ª respuesta no trae
+          JSON (stop_reason, primeros 200 car.) y cuántas veces es max_tokens:
+          que 13 de 15 análisis caigan al reintento significa que casi todos
+          los conteos los daba el prompt débil, no el riguroso.
+   2 ESTADO DEL ENTRENAMIENTO: periodo (desde línea base / todo) y tipo
+          (todos / foto única / multifoto) seleccionables; línea base por
+          defecto = publicación de v8.6; botón para fijarla ahora. El
+          historial NO se borra. Nuevas filas: error medio sobre TODAS las
+          analizadas y % dentro de ±2 (comparables con CV).
+   3 FASE 1 CV: el resultado ya era por tamaño; ahora además indica el nº
+          de ejemplos por columna, marca n<5 y compara con Claude usando el
+          mismo periodo y solo foto única.
+   ══════════════════════════════════════════
    Pellet Counter v9.0 — investigación: visión clásica (OpenCV.js)
    Módulo EXPERIMENTAL aparte (js/cv-experimental.js) + tarjeta "🧪" en
    Ajustes. No toca el flujo normal ni ningún conteo. Único cambio en este
@@ -373,7 +389,7 @@
    Fix: JSON parser robusto
    ══════════════════════════════════════════ */
 
-const VERSION = 'v9.0';
+const VERSION = 'v9.1';
 
 /* ══ CAPTURA DE LOGS (v7.9.9) ══
    No hay DevTools a mano en un móvil real — esto guarda los últimos
@@ -899,6 +915,7 @@ async function analyzeOneFoto(entry) {
      runCountAI ya tenía para foto única — antes analyzeOneFoto solo
      intentaba un regex de rescate y, si fallaba, daba error directo
      sin reintentar con una segunda llamada a la API. */
+  let mStop=null;
   async function askClaude(promptText, includeFewShot) {
     const fewShot=includeFewShot?buildFewShotBlocks(singleSize):[];
     const res=await fetch('https://api.anthropic.com/v1/messages',{
@@ -912,6 +929,7 @@ async function analyzeOneFoto(entry) {
     });
     if(!res.ok){const err=await res.json();throw new Error(err.error?.message||`HTTP ${res.status}`);}
     const data=await res.json();
+    mStop=data.stop_reason||null;
     return data.content[0].text.trim().replace(/```json|```/g,'').trim();
   }
   function extractJson(text){
@@ -921,9 +939,13 @@ async function analyzeOneFoto(entry) {
   }
 
   try {
-    let text=extractJson(await askClaude(prompt,true));
+    const firstRaw=await askClaude(prompt,true);
+    let text=extractJson(firstRaw);
+    let mViaRetry=false, mFirstStop=null;
     if(!text){
-      const simplePrompt=`Cuenta los objetos circulares visibles en la imagen.\nResponde SOLO con este JSON sin ningún texto adicional:\n{"small":0,"medium":0,"large":0,"total":0,"confidence":"media","notes":null}\nSustituye los 0 de "medium" y "total" por el número real que cuentes (deben ser iguales).`;
+      mViaRetry=true; mFirstStop=mStop;
+      console.log(`[multifoto] 1ª respuesta SIN JSON (stop_reason=${mFirstStop}, ${firstRaw.length} car.):`,JSON.stringify(firstRaw.slice(0,200)));
+      const simplePrompt=`Cuenta los objetos circulares visibles en la imagen.\nResponde SOLO con este JSON sin ningún texto adicional:\n{"small":0,"medium":0,"large":0,"total":0,"confidence":"media","notes":null}\nSustituye los 0 de "medium" y "total" por el número real que cuentes (deben ser iguales) y "confidence" por "alta", "media" o "baja" según lo seguro que estés del conteo.`;
       text=extractJson(await askClaude(simplePrompt,false));
       if(!text)throw new Error('La IA no devolvió JSON tras reintentar. Pulsa la foto de nuevo o elimínala y repite.');
     }
@@ -938,7 +960,7 @@ async function analyzeOneFoto(entry) {
     }
     const validConf=['alta','media','baja'].includes(r.confidence);
     if(!validConf)console.log('[multifoto] Respuesta SIN confidence válida (se muestra "media"):',JSON.stringify(r));
-    recordConfidenceOutcome('multi',!validConf,false,singleSize);
+    recordConfidenceOutcome('multi',!validConf,mViaRetry,singleSize,mFirstStop);
     entry.result={total,aiTotal:total,confidence:validConf?r.confidence:'media',notes:r.notes,sizeWarn,sizeDeclared:singleSize};
     const over=multiPhotoOverLimit(entry.result);
     if(over)showToast(`⚠️ Una foto tiene ${total} uds: supera el máximo recomendado (${over.lim}) para ${over.size}mm`,true);
@@ -1297,6 +1319,7 @@ async function runCountAI() {
   console.log('SINGLE IMAGE SIZE:', lastImageBase64.length);
   logAnalysisSend('foto única',lastImageMime,lastImageBase64,fewShotCount,prompt);
 
+  let lastStopReason=null;
   async function askClaude(promptText, includeFewShot) {
     const fewShot=(includeFewShot&&sizeMode==='single')?buildFewShotBlocks(singleSize):[];
     const res=await fetch('https://api.anthropic.com/v1/messages',{
@@ -1310,6 +1333,7 @@ async function runCountAI() {
     });
     if(!res.ok){const err=await res.json();throw new Error(err.error?.message||`HTTP ${res.status}`);}
     const data=await res.json();
+    lastStopReason=data.stop_reason||null;
     return data.content[0].text.trim().replace(/```json|```/g,'').trim();
   }
 
@@ -1320,20 +1344,27 @@ async function runCountAI() {
   }
 
   async function callClaude(prompt) {
-    let text=extractJson(await askClaude(prompt,true));
-    let viaRetry=false;
+    const firstRaw=await askClaude(prompt,true);
+    let text=extractJson(firstRaw);
+    let viaRetry=false, firstStop=null;
     if(!text){
-      viaRetry=true;
+      viaRetry=true; firstStop=lastStopReason;
+      /* v9.1: se mide POR QUE la 1a respuesta no trae JSON (cortada por max_tokens=300? texto
+         antes del JSON?). Si fuera max_tokens, el reintento "simple" (sin cuadricula ni reglas)
+         estaria produciendo la mayoria de los conteos. */
+      console.log(`1ª respuesta SIN JSON (stop_reason=${firstStop}, ${firstRaw.length} car.):`,JSON.stringify(firstRaw.slice(0,200)));
       /* FIX CRÍTICO: reintento único con prompt ultra-simple antes de rendirse */
+      /* v9.1: el reintento ahora tambien pide "confidence" (antes solo {"total":0}, y el 100% de los
+         "no disponible" salia de aqui). El "media" del JSON es un valor de plantilla, no una sugerencia. */
       const simplePrompt=sizeMode==='single'
-        ?`Cuenta cuántos discos circulares hay en esta imagen. Responde EXCLUSIVAMENTE con este JSON, sin ningún texto antes ni después: {"total": 0}. Sustituye el 0 por el número real que cuentes.`
-        :`Cuenta discos circulares y clasifícalos por tamaño relativo: pequeños en "small", medianos en "medium", grandes en "large". Responde EXCLUSIVAMENTE con este JSON, sin texto antes ni después: {"small":0,"medium":0,"large":0,"total":0}. Sustituye los 0 por los números reales.`;
+        ?`Cuenta cuántos discos circulares hay en esta imagen. Responde EXCLUSIVAMENTE con este JSON, sin ningún texto antes ni después: {"total": 0, "confidence": "media"}. Sustituye el 0 por el número real que cuentes y "confidence" por "alta", "media" o "baja" según lo seguro que estés del conteo ("media" o "baja" si hay discos solapados, amontonados o mal iluminados).`
+        :`Cuenta discos circulares y clasifícalos por tamaño relativo: pequeños en "small", medianos en "medium", grandes en "large". Responde EXCLUSIVAMENTE con este JSON, sin texto antes ni después: {"small":0,"medium":0,"large":0,"total":0,"confidence":"media"}. Sustituye los 0 por los números reales y "confidence" por "alta", "media" o "baja" según lo seguro que estés del conteo.`;
       text=extractJson(await askClaude(simplePrompt,false));
       if(!text)throw new Error('La IA no devolvió JSON tras reintentar. Pulsa "Analizar de nuevo".');
     }
     const r=JSON.parse(text);
     r.total=r.total||(r.small||0)+(r.medium||0)+(r.large||0);
-    r._viaRetry=viaRetry;
+    r._viaRetry=viaRetry; r._firstStop=firstStop;
     return r;
   }
 
@@ -1361,7 +1392,7 @@ async function runCountAI() {
        se muestra así y se avisa de revisar la foto (no se aparenta "alta"). */
     const confidence=['alta','media','baja'].includes(result.confidence)?result.confidence:null;
     if(!confidence)console.log('Respuesta SIN confidence válida (¿vino del reintento simple?):',JSON.stringify(result));
-    recordConfidenceOutcome('single',!confidence,!!result._viaRetry,sizeMode==='single'?singleSize:'mix');
+    recordConfidenceOutcome('single',!confidence,!!result._viaRetry,sizeMode==='single'?singleSize:'mix',result._firstStop);
     const confLabel=confidence||'no disponible';
     const confColor=confidence==='alta'?'#3ecf8e':confidence==='baja'?'#f97316':'#f59e0b';
     setStatus('statusCount',`✓ ${total} detectados · Confianza: ${confLabel}${result.notes?' · '+result.notes:''}`);
@@ -1580,7 +1611,7 @@ const FEWSHOT_MIN = 3;
 
 function renderExampleCounts() {
   const el = qs('#exCounts'); if (!el) return;
-  const stats = computeStats();
+  const stats = computeStats({ scope: 'all', kind: 'all' });
   /* m = muestreos (análisis), e = ejemplos guardados — colores distintos para no confundirlos */
   el.innerHTML = ['4','8','12'].map(s => {
     const st = stats[s];
@@ -2109,13 +2140,14 @@ function loadHistory(){return JSON.parse(localStorage.getItem('analysisHistory')
    individualmente) y habría corrompido otra. Ahora se busca por id. */
 function saveHistoryEntry(entry){
   if(!entry.id)entry.id=Date.now().toString(36)+Math.random().toString(36).slice(2,6);
+  if(!entry.ts)entry.ts=Date.now();   /* v9.1: para las métricas "desde la línea base" */
   const h=loadHistory();h.unshift(entry);if(h.length>50)h.pop();
   localStorage.setItem('analysisHistory',JSON.stringify(h));updateHistoryBadge();
   return entry.id;
 }
 function replaceHistoryEntry(id,entry){
   const h=loadHistory(),idx=h.findIndex(e=>e.id===id); if(idx<0)return false;
-  entry.id=id; h[idx]=entry;
+  entry.id=id; if(!entry.ts)entry.ts=h[idx].ts||Date.now(); h[idx]=entry;
   localStorage.setItem('analysisHistory',JSON.stringify(h));updateHistoryBadge();
   return true;
 }
@@ -2315,18 +2347,25 @@ const CONF_STATS_KEY='confidenceStats';
 const CONF_WARN_PCT=15;      /* % a partir del cual se recomienda revisar el prompt del reintento */
 const CONF_MIN_SAMPLE=10;    /* con menos análisis el % no es fiable */
 function loadConfStats(){
-  const blank={single:{total:0,missing:0,viaRetry:0},multi:{total:0,missing:0},bySize:{},since:null};
+  const blank={single:{total:0,missing:0,viaRetry:0,retried:0,cutMax:0},multi:{total:0,missing:0,retried:0,cutMax:0},bySize:{},since:null};
   try{
     const s=JSON.parse(localStorage.getItem(CONF_STATS_KEY)||'null');
     if(!s)return blank;
-    return {single:Object.assign(blank.single,s.single),multi:Object.assign(blank.multi,s.multi),bySize:s.bySize||{},since:s.since||null};
+    const out={single:Object.assign(blank.single,s.single),multi:Object.assign(blank.multi,s.multi),bySize:s.bySize||{},since:s.since||null};
+    /* contadores de v8.4-v9.0 no tenían "retried": todos los reintentos de entonces dejaban el resultado
+       sin confianza, así que viaRetry ya es el nº de reintentos (cutMax no se medía: queda en 0) */
+    if(!s.single||typeof s.single.retried!=='number')out.single.retried=out.single.viaRetry||0;
+    return out;
   }catch(err){ return blank; }
 }
-function recordConfidenceOutcome(kind,missing,viaRetry,size){
+function recordConfidenceOutcome(kind,missing,viaRetry,size,firstStop){
   const s=loadConfStats();
   const k=kind==='multi'?'multi':'single';
   s[k].total++;
   if(missing){ s[k].missing++; if(k==='single'&&viaRetry)s.single.viaRetry++; }
+  /* v9.1: cuantas veces la 1a respuesta no trajo JSON (-> reintento simple), con o sin confianza
+     en el resultado, y cuantas de ellas por haberse cortado en max_tokens. */
+  if(viaRetry){ s[k].retried=(s[k].retried||0)+1; if(firstStop==='max_tokens')s[k].cutMax=(s[k].cutMax||0)+1; }
   /* v8.6: desglose por tamaño (single + multi juntos: es el tamaño de la
      foto lo que interesa). Los análisis anteriores a v8.6 no se pueden
      repartir: solo cuentan en los totales. */
@@ -2357,6 +2396,7 @@ function renderConfStats(){
     <div style="font-weight:700;margin-bottom:2px">Respuestas sin nivel de confianza (foto única)</div>
     <div style="color:${color};font-weight:700;font-size:14px">${a.missing} de ${a.total} análisis (${pct}%)</div>
     ${a.missing?`<div style="color:var(--muted)">${a.viaRetry} vinieron del reintento simple · ${direct} del prompt normal</div>`:''}
+    ${a.total?`<div style="color:${a.retried&&Math.round(100*a.retried/a.total)>CONF_WARN_PCT?'var(--orange)':'var(--muted)'}">1ª respuesta sin JSON (→ reintento simple): ${a.retried||0} de ${a.total} (${Math.round(100*(a.retried||0)/a.total)}%) · ${a.cutMax||0} cortadas por max_tokens <span style="color:var(--hint)">(medido desde v9.1; el motivo exacto está en el log)</span></div>`:''}
     ${(()=>{const keys=['4','8','12','mix'].filter(k=>s.bySize[k]&&s.bySize[k].total);if(!keys.length)return '';const tot=keys.reduce((n,k)=>n+s.bySize[k].total,0);const sub=a.total+m.total-tot;return `<div style="color:var(--muted)">Por tamaño (single+multi): ${keys.map(k=>`${k==='mix'?'clasificar':k+'mm'} ${s.bySize[k].missing}/${s.bySize[k].total} (${Math.round(100*s.bySize[k].missing/s.bySize[k].total)}%)`).join(' · ')}${sub>0?` <span style="color:var(--hint)">· ${sub} análisis previos a v8.6 sin tamaño registrado</span>`:''}</div>`;})()}
     ${m.total?`<div style="color:var(--muted)">Multifoto: ${m.missing} de ${m.total} fotos sin confianza (se muestran como "media")</div>`:''}
     ${a.total<CONF_MIN_SAMPLE?`<div style="color:var(--hint)">Pocas muestras (&lt;${CONF_MIN_SAMPLE}): el porcentaje aún no es fiable.</div>`:''}
@@ -2367,26 +2407,62 @@ function renderConfStats(){
 }
 
 /* ══ ESTADO DEL ENTRENAMIENTO (dashboard en Ajustes) ══ */
-function computeStats() {
-  const bySize={'4':[],'8':[],'12':[]};
+/* v9.1: las métricas de "Estado del entrenamiento" agregaban TODO el historial (hasta
+   50 entradas), mezclando pruebas anteriores a los arreglos de cámara (v8.3), visor
+   (v8.5) y multifoto (v8.6), y fotos únicas con multifoto (el error de un lote de
+   varias fotos se suma y infla el "±N"). Ahora se puede ver solo desde una LÍNEA BASE
+   (por defecto la publicación de v8.6) y filtrar por tipo. El historial NO se borra. */
+const STATS_BASELINE_DEFAULT = new Date('2026-10-14T14:40:10+02:00').getTime();   /* commit v8.6 */
+function getStatsBaseline(){ const v=parseInt(localStorage.getItem('statsBaseline'),10); return v>0?v:STATS_BASELINE_DEFAULT; }
+function getStatsScope(){ return localStorage.getItem('statsScope')==='all'?'all':'baseline'; }
+function getStatsKind(){ const k=localStorage.getItem('statsKind'); return (k==='single'||k==='multi')?k:'all'; }
+/* instante de una entrada: ts (v9.1+) → fecha "d/m/aaaa hh:mm" → id (Date.now en base 36) → 0 (desconocido) */
+function entryTime(e){
+  if(typeof e.ts==='number')return e.ts;
+  const m=/^(\d{1,2})\/(\d{1,2})\/(\d{4})[ ,]+(\d{1,2}):(\d{2})/.exec(e.date||'');
+  if(m)return new Date(+m[3],+m[2]-1,+m[1],+m[4],+m[5]).getTime();
+  if(e.id){ const t=parseInt(String(e.id).slice(0,8),36); if(t>1.6e12&&t<4e12)return t; }
+  return 0;
+}
+/* Entradas de visión con conteo de la IA y un solo tamaño (las pesadas no tienen aiTotal).
+   opts: {scope:'baseline'|'all', kind:'all'|'single'|'multi'} — por defecto, lo elegido en Ajustes. */
+function statsHistoryEntries(opts){
+  opts=opts||{};
+  const scope=opts.scope||getStatsScope(), kind=opts.kind||getStatsKind(), base=getStatsBaseline();
+  const out={'4':[],'8':[],'12':[]}; let excluded=0;
   loadHistory().forEach(e=>{
-    if(e.aiTotal===undefined)return;
+    if(e.aiTotal===undefined||e.method==='weigh')return;
     const sizesUsed=[e.size4>0?'4':null,e.size8>0?'8':null,e.size12>0?'12':null].filter(Boolean);
     if(sizesUsed.length!==1)return;
-    bySize[sizesUsed[0]].push(e);
+    const isMulti=getMultiPhotoCount(e)>0;
+    if(kind==='single'&&isMulti)return;
+    if(kind==='multi'&&!isMulti)return;
+    if(scope==='baseline'&&entryTime(e)<base){ excluded++; return; }
+    out[sizesUsed[0]].push(e);
   });
+  out.excluded=excluded;
+  return out;
+}
+function computeStats(opts) {
+  const bySize=statsHistoryEntries(opts);
   const examples=getReferenceExamples();
-  const stats={};
+  const stats={excluded:bySize.excluded};
   ['4','8','12'].forEach(size=>{
     const entries=bySize[size];
     const corrected=entries.filter(e=>e.total!==e.aiTotal);
+    const errs=entries.map(e=>Math.abs(e.total-e.aiTotal));
     stats[size]={
       totalAnalyses:entries.length,
       correctedCount:corrected.length,
       exampleCount:examples.filter(e=>e.size===size).length,
+      /* "Error" histórico: media SOLO sobre las analizadas que se corrigieron */
       avgAbsError:corrected.length?corrected.reduce((s,e)=>s+Math.abs(e.total-e.aiTotal),0)/corrected.length:null,
       avgSignedError:corrected.length?corrected.reduce((s,e)=>s+(e.total-e.aiTotal),0)/corrected.length:null,
-      precisionPct:entries.length?Math.round((entries.length-corrected.length)/entries.length*100):null
+      precisionPct:entries.length?Math.round((entries.length-corrected.length)/entries.length*100):null,
+      /* v9.1: error medio sobre TODAS (las no corregidas cuentan 0) y % dentro de ±2 — es la
+         medida comparable con la de la visión clásica (Ajustes → 🧪) */
+      maeAll:entries.length?errs.reduce((a,b)=>a+b,0)/entries.length:null,
+      within2Pct:entries.length?Math.round(errs.filter(x=>x<=2).length/entries.length*100):null
     };
   });
   return stats;
@@ -2408,10 +2484,31 @@ function trainingRecommendation(s){
   const consistency=Math.abs(s.avgSignedError)/s.avgAbsError;
   return consistency>0.6?'Ajustar prompt':'Multifoto, grupos chicos';
 }
+window.setStatsScope=function(v){ try{localStorage.setItem('statsScope',v==='all'?'all':'baseline');}catch(e){} renderStats(); };
+window.setStatsKind=function(v){ try{localStorage.setItem('statsKind',(v==='single'||v==='multi')?v:'all');}catch(e){} renderStats(); };
+window.resetStatsBaseline=function(){
+  if(!confirm('¿Fijar la línea base AHORA?\n\nLas métricas del entrenamiento (muestras, error, tendencia, precisión) empezarán de cero con los análisis a partir de este momento. El historial NO se borra y "Todo el historial" sigue disponible.'))return;
+  try{localStorage.setItem('statsBaseline',String(Date.now())); localStorage.setItem('statsScope','baseline');}catch(e){}
+  renderStats(); renderConfStats(); showToast('Línea base fijada ahora ✓');
+};
 window.renderStats = function renderStats() {
   const el=qs('#trainingDashboard'); if(!el)return;
+  const scope=getStatsScope(), kind=getStatsKind(), base=getStatsBaseline();
   const stats=computeStats();
   const sizes=['4','8','12'];
+  const baseTxt=new Date(base).toLocaleString('es-ES',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'});
+  const seg=(label,active,fn)=>`<button class="hist-subtab${active?' active':''}" onclick="${fn}" style="flex:1;justify-content:center;font-size:11px;padding:6px 4px">${label}</button>`;
+  const controls=`<div style="margin-bottom:10px">
+      <div style="font-size:11px;color:var(--muted);margin-bottom:4px">Periodo</div>
+      <div style="display:flex;gap:6px;margin-bottom:8px">${seg('Desde línea base',scope==='baseline',"setStatsScope('baseline')")}${seg('Todo el historial',scope==='all',"setStatsScope('all')")}</div>
+      <div style="font-size:11px;color:var(--muted);margin-bottom:4px">Tipo de análisis</div>
+      <div style="display:flex;gap:6px;margin-bottom:6px">${seg('Todos',kind==='all',"setStatsKind('all')")}${seg('Foto única',kind==='single',"setStatsKind('single')")}${seg('Multifoto',kind==='multi',"setStatsKind('multi')")}</div>
+      <div style="font-size:11px;color:var(--hint);line-height:1.5">${scope==='baseline'
+        ?`Contando análisis desde <b>${baseTxt}</b>${stats.excluded?` · ${stats.excluded} anteriores excluidos (siguen en el Historial)`:''}.`
+        :'Contando TODO el historial guardado (mezcla versiones antiguas con las actuales).'}
+        <br>La barra superior (m/e) siempre cuenta todo el historial.</div>
+      <button onclick="resetStatsBaseline()" style="font-size:11px;padding:4px 10px;margin-top:6px">🔄 Fijar línea base ahora</button>
+    </div>`;
   const row=(label,fn)=>`<tr><td style="padding:5px 4px;color:var(--muted);font-weight:700;text-align:left;border-top:0.5px solid var(--border)">${label}</td>${sizes.map(s=>`<td style="padding:5px 4px;text-align:center;border-top:0.5px solid var(--border)">${fn(stats[s])}</td>`).join('')}</tr>`;
   const table=`<div style="overflow-x:auto;margin-bottom:14px"><table style="width:100%;border-collapse:collapse;font-size:11px;min-width:280px">
     <thead><tr>
@@ -2420,13 +2517,16 @@ window.renderStats = function renderStats() {
     <tbody>
       ${row('Muest.',s=>s.totalAnalyses===0?'—':s.totalAnalyses)}
       ${row('Ejem.',s=>`${s.exampleCount}/${FEWSHOT_TARGET}`)}
-      ${row('Error',s=>s.totalAnalyses===0?'—':(s.correctedCount===0?'±0':'±'+Math.round(s.avgAbsError)))}
+      ${row('Err. medio',s=>s.totalAnalyses===0?'—':'±'+(Math.round(s.maeAll*10)/10)+(s.totalAnalyses<5?' <span style="color:var(--hint)">*</span>':''))}
+      ${row('Dentro ±2',s=>s.totalAnalyses===0?'—':s.within2Pct+'%')}
+      ${row('Error corr.',s=>s.totalAnalyses===0?'—':(s.correctedCount===0?'±0':'±'+Math.round(s.avgAbsError)))}
       ${row('Tend.',s=>s.totalAnalyses===0?'—':(s.correctedCount===0?'OK':(s.avgSignedError>0.3?'sub':s.avgSignedError<-0.3?'sobre':'OK')))}
-      ${row('Prec.',s=>s.totalAnalyses===0?'—':s.precisionPct+'%')}
+      ${row('Prec. exacta',s=>s.totalAnalyses===0?'—':s.precisionPct+'%')}
       ${row('Recom.',s=>trainingRecommendation(s))}
     </tbody>
-  </table></div>`;
-  el.innerHTML=table+sizes.map(s=>trainingBarHTML(s,stats[s].exampleCount)).join('');
+  </table>
+  <div style="font-size:10px;color:var(--hint);line-height:1.5;margin-top:6px"><b>Err. medio</b> = error absoluto medio sobre TODOS los análisis (los no corregidos cuentan 0); es la cifra comparable con la visión clásica. <b>Error corr.</b> = media solo de los que corregiste (por eso sale más alto). <b>Prec. exacta</b> = % sin ninguna corrección (±0), un criterio estricto. <b>Tend.</b>: sub = la IA cuenta de menos, sobre = de más. * = menos de 5 muestras: poco fiable. El error de un lote multifoto se suma entre todas sus fotos.</div></div>`;
+  el.innerHTML=controls+table+sizes.map(s=>trainingBarHTML(s,stats[s].exampleCount)).join('');
   renderConfStats();
 };
 
