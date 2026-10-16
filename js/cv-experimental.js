@@ -369,8 +369,11 @@
       html += `<tr><td style="${td}">${m.label}</td>${sizes.map(s => `<td style="${td}">${cell(per[m.key + s])}</td>`).join('')}</tr>`;
     });
     const cl = {}; sizes.forEach(s => { cl[s] = stats(claude[s]); });
-    html += `<tr><td style="${td};color:var(--blue);font-weight:700">Claude (historial, ${claudeScopeText()})</td>${sizes.map(s => `<td style="${td}">${cell(cl[s])}</td>`).join('')}</tr></tbody></table></div>
-      <div style="font-size:11px;color:var(--hint);line-height:1.5;margin:6px 0 10px">«Claude (historial)» = tus fotos únicas de ese tamaño en el Historial dentro del periodo elegido en Ajustes → Estado del entrenamiento (no exactamente las mismas fotos de los ejemplos: los ejemplos no guardaban el conteo original de Claude; los guardados desde v9.0 sí). Si no corregiste un conteo se asume que acertó. Los ejemplos están reducidos a ≤400 px, lo que penaliza sobre todo a 4mm.</div>`;
+    /* pareada: el MISMO ejemplo, conteo original de Claude (aiTotal guardado desde v9.0) vs verificado */
+    const paired = {}; sizes.forEach(s => { paired[s] = stats(rows.filter(x => x.size === s && !x.error && x.claude != null).map(x => x.claude - x.truth)); });
+    html += `<tr><td style="${td};color:var(--blue);font-weight:700">Claude (mismas fotos)</td>${sizes.map(s => `<td style="${td}">${cell(paired[s])}</td>`).join('')}</tr>
+      <tr><td style="${td};color:var(--blue);font-weight:700">Claude (historial, ${claudeScopeText()})</td>${sizes.map(s => `<td style="${td}">${cell(cl[s])}</td>`).join('')}</tr></tbody></table></div>
+      <div style="font-size:11px;color:var(--hint);line-height:1.5;margin:6px 0 10px">«Claude (mismas fotos)» = comparación pareada: los ejemplos guardados desde v9.0 recuerdan el conteo original de Claude (los anteriores no, y salen «—»); es la más justa. «Claude (historial)» = tus fotos únicas de ese tamaño en el Historial dentro del periodo elegido en Ajustes → Estado del entrenamiento (no exactamente las mismas fotos de los ejemplos: los ejemplos no guardaban el conteo original de Claude; los guardados desde v9.0 sí). Si no corregiste un conteo se asume que acertó. Los ejemplos están reducidos a ≤400 px, lo que penaliza sobre todo a 4mm.</div>`;
     /* tarjetas por ejemplo */
     html += '<div style="font-size:12px;font-weight:700;margin:6px 0">Revisión visual (amarillo = contornos de blobs · verde = círculos de Hough 45%)</div><div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px">';
     rows.forEach((x, i) => {
@@ -394,6 +397,7 @@
       version: (typeof VERSION !== 'undefined' ? VERSION : null), lib: CV_LIB_URL, maxSide: CV_MAX_SIDE,
       examples: lastRun.map(x => x.error ? { size: x.size, truth: x.truth, error: x.error } : { size: x.size, truth: x.truth, claudeAI: x.claude, rEstPx: Math.round(x.r.rEst * 10) / 10, rSource: x.r.rSource, bgBright: x.r.bgBright, components: x.r.nComp, counts: x.r.counts, houghRawBeforeMask: x.r.houghRaw, houghParam2: x.r.p2Used, imgPx: [x.r.w, x.r.h], ms: x.r.ms }),
       claudeHistoryErrors: claude,
+      claudePairedErrors: ['4', '8', '12'].reduce((o, z) => { o[z] = lastRun.filter(x => x.size === z && !x.error && x.claude != null).map(x => x.claude - x.truth); return o; }, {}),
       claudeHistoryScope: claudeScopeText()
     };
     navigator.clipboard.writeText(JSON.stringify(out, null, 1)).then(() => { if (window.showToast) showToast('Resultados copiados ✓'); });

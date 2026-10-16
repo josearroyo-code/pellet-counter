@@ -183,7 +183,7 @@
     <h1>Pellet Counter <span class="ai-badge">✦ Claude AI</span></h1>
     <div style="display:flex;align-items:center;gap:10px">
       <div id="analyzeSpinner" class="spinner"></div>
-      <span class="ver">v9.1</span>
+      <span class="ver">v9.2</span>
     </div>
   </div>
   <div class="subbar" id="exCounts" style="border-bottom:none;padding-bottom:2px"></div>
@@ -580,8 +580,9 @@
       <div class="card">
         <p class="card-label">Acerca de</p>
         <div style="font-size:12px;color:var(--muted);line-height:2.2">
-          <div><strong style="color:var(--text)">Pellet Counter v9.1</strong></div>
+          <div><strong style="color:var(--text)">Pellet Counter v9.2</strong></div>
           <div>Motor IA · Claude Sonnet Vision</div>
+          <div>Conteo con IA · límite de respuesta 600 tokens (antes 300, que cortaba la respuesta antes del JSON y forzaba el reintento)</div>
           <div>Estado del entrenamiento · periodo (desde línea base / todo) y tipo (foto única / multifoto), con error medio sobre todas las analizadas</div>
           <div>Reintento simple · ahora también devuelve "confidence"; se registra por qué la 1ª respuesta no trae JSON</div>
           <div>🧪 Experimental · conteo con visión clásica (OpenCV.js) para comparar con Claude, en Ajustes — no afecta a los conteos</div>
@@ -708,13 +709,13 @@
   <canvas id="cameraCaptureCanvas" style="display:none"></canvas>
 </div>
 
-<!-- splash v9.1 -->
+<!-- splash v9.2 -->
 <div id="splash" style="position:fixed;inset:0;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:9999;transition:opacity 0.4s">
   <div style="font-size:44px;margin-bottom:14px">⬤</div>
   <div style="font-size:20px;font-weight:700;color:var(--text);letter-spacing:-0.5px">Pellet Counter</div>
   <div style="font-size:12px;color:var(--green);font-weight:600;margin-top:6px;display:flex;align-items:center;gap:8px">
     <span>✦ Claude AI</span><span style="color:var(--hint)">·</span>
-    <span style="font-family:monospace;color:var(--blue)">v9.1</span>
+    <span style="font-family:monospace;color:var(--blue)">v9.2</span>
   </div>
   <div style="margin-top:28px;width:60px;height:2px;background:var(--surface2);border-radius:2px;overflow:hidden">
     <div style="height:100%;background:linear-gradient(90deg,var(--blue),var(--green));border-radius:2px;animation:load 1.3s ease-out forwards"></div>

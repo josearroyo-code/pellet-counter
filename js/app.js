@@ -1,4 +1,18 @@
 /* ══════════════════════════════════════════
+   Pellet Counter v9.2 — max_tokens 300 → 600 en las llamadas de conteo
+   (foto única y multifoto; el reintento usa el mismo límite).
+   Motivo: el 87% de los análisis de foto única no devolvía JSON en la 1ª
+   llamada y caía al reintento simple (más débil, y reenviando la imagen).
+   La causa sospechada es que el prompt (cuadrícula "mental", reglas) hace
+   que el modelo razone por escrito y se corte a los 300 tokens antes del
+   JSON. 600 deja margen para el JSON completo (confidence, notes,
+   size_match, overlap). El diagnóstico de "1ª respuesta sin JSON" sigue
+   activo para comprobar que el porcentaje baja; si NO baja, la causa es
+   otra (ver stop_reason en el log). Aviso: cambia el comportamiento de
+   los conteos — para medir, fijar línea base DESPUÉS de este cambio.
+   Fase 1 CV: nueva fila "Claude (mismas fotos)" con el conteo original
+   guardado en cada ejemplo (aiTotal, desde v9.0) → comparación pareada.
+   ══════════════════════════════════════════
    Pellet Counter v9.1 — antes de la Fase 1 de CV: métricas limpias
    1 REINTENTO SIMPLE: ahora pide también "confidence" (antes solo
           {"total":0}; 13 de 15 análisis, el 100% de los "no disponible",
@@ -389,7 +403,9 @@
    Fix: JSON parser robusto
    ══════════════════════════════════════════ */
 
-const VERSION = 'v9.1';
+const VERSION = 'v9.2';
+/* Límite de tokens de la respuesta en conteo (foto única, multifoto y reintento). 300 cortaba el 87% de las respuestas. */
+const COUNT_MAX_TOKENS = 600;
 
 /* ══ CAPTURA DE LOGS (v7.9.9) ══
    No hay DevTools a mano en un móvil real — esto guarda los últimos
@@ -921,7 +937,7 @@ async function analyzeOneFoto(entry) {
     const res=await fetch('https://api.anthropic.com/v1/messages',{
       method:'POST',
       headers:{'Content-Type':'application/json','x-api-key':apiKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
-      body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:300,messages:[{role:'user',content:[
+      body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:COUNT_MAX_TOKENS,messages:[{role:'user',content:[
         ...fewShot,
         {type:'image',source:{type:'base64',media_type:entry.mime,data:entry.base64}},
         {type:'text',text:promptText}
@@ -1325,7 +1341,7 @@ async function runCountAI() {
     const res=await fetch('https://api.anthropic.com/v1/messages',{
       method:'POST',
       headers:{'Content-Type':'application/json','x-api-key':apiKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
-      body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:300,messages:[{role:'user',content:[
+      body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:COUNT_MAX_TOKENS,messages:[{role:'user',content:[
         ...fewShot,
         {type:'image',source:{type:'base64',media_type:lastImageMime,data:lastImageBase64}},
         {type:'text',text:promptText}
