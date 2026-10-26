@@ -1,4 +1,21 @@
 /* ══════════════════════════════════════════
+   Pellet Counter v9.3 — tras el muestreo limpio (15 análisis, ±0.75-1 sin outliers)
+   1 OUTLIERS: los 3 estaban POR ENCIMA del máximo recomendado por foto (8mm 54>40,
+          4mm 50>30, 12mm 38>30) pero la alerta de densidad solo existía en
+          multifoto. Ahora también avisa en foto única (aiTotal > MULTI_MAX_PER_PHOTO).
+   2 PERFIL 4mm: cláusula de pellets "de canto" (y se suaviza "ignora completamente
+          los hilos", que la contradecía). OJO: el perfil 4mm ya dice "si dudas entre N
+          y N+1 elige el menor / es mejor quedarse corto" (v7.9.7, cuando 4mm
+          sobrecontaba); puede estar contribuyendo al infraconteo (-13). No se ha
+          tocado: decidir tras otra muestra de 4mm.
+   3 NITIDEZ: indicador en vivo en el visor ("🟢 Enfoque bueno / 🟡 Afinando / 🔴
+          Parece borroso, mantén firme") a partir de la varianza del Laplaciano
+          (480 px de ancho, cada 300 ms) comparada con el mejor valor de los últimos
+          5 s — detecta bien el movimiento/desenfoque transitorio, NO un desenfoque
+          constante. Sin umbrales absolutos calibrados: cada foto única guarda
+          `sharpness` (también las subidas de archivo, medido igual) y el historial
+          lo muestra, para calibrar con datos reales. Se loguea focusMode de la cámara.
+   ══════════════════════════════════════════
    Pellet Counter v9.2 — max_tokens 300 → 600 en las llamadas de conteo
    (foto única y multifoto; el reintento usa el mismo límite).
    Motivo: el 87% de los análisis de foto única no devolvía JSON en la 1ª
@@ -403,7 +420,7 @@
    Fix: JSON parser robusto
    ══════════════════════════════════════════ */
 
-const VERSION = 'v9.2';
+const VERSION = 'v9.3';
 /* Límite de tokens de la respuesta en conteo (foto única, multifoto y reintento). 300 cortaba el 87% de las respuestas. */
 const COUNT_MAX_TOKENS = 600;
 
@@ -433,6 +450,8 @@ let lastConfidence  = null;
 /* v8.4: cómo llegó la foto única actual: 'camera' (cámara en vivo de la
    app) o 'file' (archivo subido). Se guarda en la entrada del historial. */
 let lastCaptureMethod = null;
+/* v9.3: nitidez (varianza del Laplaciano) de la foto única actual, medida igual para cámara y archivo */
+let lastSharpness = null;
 /* v8.2: id de la entrada del historial que el ajuste ±1 puede modificar
    (null mientras haya un aviso de tamaño sin resolver: esa entrada aún
    no está guardada, ver pendingMismatchEntry). */
@@ -472,7 +491,7 @@ const qs  = s => document.querySelector(s);
 const qsa = s => document.querySelectorAll(s);
 
 const PELLET_PROFILES = {
-  '4': "Electrodos de disco sinterizado de 4mm de diámetro, de aplicación médica — NO son condensadores cerámicos, resistencias ni ningún otro componente electrónico, aunque el disco pequeño con un hilo metálico pueda recordar a uno. Son los discos MÁS PEQUEÑOS de la imagen — significativamente más pequeños que los de 8mm y 12mm. Color rosado o marrón claro cuando son nuevos, se vuelven gris oscuro o marrón oscuro con la exposición a la luz — ambos colores son el mismo producto. Pesan aproximadamente 0.08g cada uno. Tienen un hilo fino metálico saliendo del centro, muy difícil de ver a esta escala. INSTRUCCIONES CRÍTICAS: son extremadamente pequeños y tienden a agruparse. Si ves una zona con varios puntos oscuros juntos, asume que son múltiples discos individuales y cuenta cada punto circular por separado. Cuenta cada disco individualmente aunque se toquen o solapen. Ignora completamente los hilos metálicos — son líneas finas, no discos. ATENCIÓN AL SOBRECONTEO: estos pellets son muy pequeños y tienden a aparecer más de lo que realmente son. Si dudas entre N y N+1, elige siempre el número menor. Cuando veas una zona oscura con pellets muy juntos, sé conservador — es mejor quedarse corto 1-2 unidades que pasarse.",
+  '4': "Electrodos de disco sinterizado de 4mm de diámetro, de aplicación médica — NO son condensadores cerámicos, resistencias ni ningún otro componente electrónico, aunque el disco pequeño con un hilo metálico pueda recordar a uno. Son los discos MÁS PEQUEÑOS de la imagen — significativamente más pequeños que los de 8mm y 12mm. Color rosado o marrón claro cuando son nuevos, se vuelven gris oscuro o marrón oscuro con la exposición a la luz — ambos colores son el mismo producto. Pesan aproximadamente 0.08g cada uno. Tienen un hilo fino metálico saliendo del centro, muy difícil de ver a esta escala. INSTRUCCIONES CRÍTICAS: son extremadamente pequeños y tienden a agruparse. Si ves una zona con varios puntos oscuros juntos, asume que son múltiples discos individuales y cuenta cada punto circular por separado. Cuenta cada disco individualmente aunque se toquen o solapen. Ignora los hilos metálicos sueltos — son líneas finas, no discos (salvo el hilo de un pellet de canto, ver la nota siguiente). Algunos pellets pueden estar de canto o inclinados, mostrando principalmente el hilo metálico y solo el borde del disco. Cuenta estos casos igual que los que están planos — no los ignores ni los confundas con restos de hilo suelto. ATENCIÓN AL SOBRECONTEO: estos pellets son muy pequeños y tienden a aparecer más de lo que realmente son. Si dudas entre N y N+1, elige siempre el número menor. Cuando veas una zona oscura con pellets muy juntos, sé conservador — es mejor quedarse corto 1-2 unidades que pasarse.",
   '8': "Electrodos de disco sinterizado de 8mm de diámetro, de aplicación médica — NO son condensadores cerámicos, resistencias ni ningún otro componente electrónico, aunque el disco con un hilo metálico pueda recordar a uno. Son discos de tamaño MEDIANO — más pequeños que los de 12mm pero claramente más grandes que los de 4mm. Color rosado, malva o marrón dependiendo de la exposición a la luz. Pesan aproximadamente 0.32g cada uno. Tienen un hilo fino metálico saliendo del centro. Cuando dos discos se toquen o solapen parcialmente cuenta cada uno como unidad independiente. Si hay solapamiento en zona central agrupa visualmente y estima cuántos discos hay en esa zona. Ignora completamente los hilos metálicos.",
   '12': "Electrodos de disco sinterizado de 12mm de diámetro, de aplicación médica — NO son condensadores cerámicos, resistencias ni ningún otro componente electrónico, aunque el disco con un hilo metálico pueda recordar a uno. Son los discos MÁS GRANDES de la imagen — notablemente más grandes que los de 8mm. Color rosado, malva o marrón dependiendo de la exposición a la luz — pueden verse claros (rosado/beige) o más oscuros (marrón). Pesan aproximadamente 0.70g cada uno. Tienen un hilo fino metálico de conexión saliendo del centro, a veces doblado o pegado al disco y difícil de ver. Al ser grandes son fáciles de distinguir individualmente. Cuenta cada disco circular grande por separado aunque se toquen en los bordes. Ignora completamente los hilos metálicos."
 };
@@ -1069,8 +1088,11 @@ window.confirmMultiTotal = function() {
 function processSinglePhotoDataUrl(dataUrl, mime, method) {
   lastImageMime=mime;
   lastCaptureMethod=method||null;
+  lastSharpness=null;
   const img=new Image();
   img.onload=()=>{
+    lastSharpness=sharpnessOf(img,img.naturalWidth,img.naturalHeight);
+    console.log(`NITIDEZ foto (${method||'?'}): ${lastSharpness} · ${img.naturalWidth}×${img.naturalHeight}`);
     const canvas=qs('#cvCount'),maxW=Math.min(window.innerWidth-28,800);
     let w=img.naturalWidth,h=img.naturalHeight;
     if(w>maxW){h=Math.round(h*maxW/w);w=maxW;}
@@ -1182,8 +1204,8 @@ function logCameraSettings(stream, when){
   const track=stream.getVideoTracks()[0]; if(!track) return null;
   const s=track.getSettings?track.getSettings():{};
   let caps=null; try{ caps=track.getCapabilities?track.getCapabilities():null; }catch(err){}
-  console.log(`CÁMARA (${when}) "${track.label}" getSettings:`, JSON.stringify({width:s.width,height:s.height,frameRate:s.frameRate,facingMode:s.facingMode}));
-  if(caps) console.log('CÁMARA capabilities (máx.):', JSON.stringify({width:caps.width&&caps.width.max,height:caps.height&&caps.height.max}));
+  console.log(`CÁMARA (${when}) "${track.label}" getSettings:`, JSON.stringify({width:s.width,height:s.height,frameRate:s.frameRate,facingMode:s.facingMode,focusMode:s.focusMode}));
+  if(caps) console.log('CÁMARA capabilities (máx.):', JSON.stringify({width:caps.width&&caps.width.max,height:caps.height&&caps.height.max,focusMode:caps.focusMode,focusDistance:caps.focusDistance}));
   return {track,settings:s,caps};
 }
 
@@ -1195,8 +1217,71 @@ function updateCameraResInfo(){
   el.textContent = w&&h ? `Resolución de la cámara: ${w}×${h}` : '';
 }
 
+/* ══ NITIDEZ (v9.3) ══
+   Varianza del Laplaciano sobre gris, a 480 px de ancho (independiente de la
+   resolución de origen). Mide "cuánto borde hay": una imagen borrosa o movida
+   da valores bajos. Depende de la escena (pellets sobre fondo liso dan valores
+   distintos que otra cosa), por eso el indicador en vivo compara con el MEJOR
+   valor reciente en vez de un umbral absoluto. */
+const SHARP_W = 480;
+let sharpCanvas = null, sharpCtx = null;
+function sharpnessOf(src, sw, sh){
+  if(!sw||!sh) return null;
+  const w=SHARP_W, h=Math.max(8,Math.round(sh*w/sw));
+  if(!sharpCanvas){ sharpCanvas=document.createElement('canvas'); sharpCtx=sharpCanvas.getContext('2d',{willReadFrequently:true}); }
+  if(sharpCanvas.width!==w||sharpCanvas.height!==h){ sharpCanvas.width=w; sharpCanvas.height=h; }
+  try{ sharpCtx.drawImage(src,0,0,w,h); }catch(err){ return null; }
+  const d=sharpCtx.getImageData(0,0,w,h).data, g=new Uint8Array(w*h);
+  for(let i=0,p=0;i<g.length;i++,p+=4) g[i]=(d[p]*77+d[p+1]*150+d[p+2]*29)>>8;
+  let sum=0,sum2=0,n=0;
+  for(let y=1;y<h-1;y++){
+    for(let x=1,i=y*w+1;x<w-1;x++,i++){
+      const l=g[i-1]+g[i+1]+g[i-w]+g[i+w]-4*g[i];
+      sum+=l; sum2+=l*l; n++;
+    }
+  }
+  if(!n) return null;
+  const mean=sum/n;
+  return Math.round((sum2/n-mean*mean)*10)/10;
+}
+/* Veredicto puro (testeable): samples=[{t,s}] en ms. Compara la nitidez actual
+   (mediana de las 3 últimas) con el pico de los últimos 5 s. */
+const FOCUS_WINDOW_MS = 5000, FOCUS_GOOD = 0.85, FOCUS_BLUR = 0.6, FOCUS_MIN_SAMPLES = 6;
+function focusVerdict(samples, now){
+  const recent=samples.filter(x=>x.t>=now-FOCUS_WINDOW_MS);
+  if(recent.length<FOCUS_MIN_SAMPLES) return {state:'measuring'};
+  const peak=Math.max(...recent.map(x=>x.s));
+  const last3=recent.slice(-3).map(x=>x.s).sort((a,b)=>a-b), cur=last3[Math.floor(last3.length/2)];
+  if(!(peak>0)) return {state:'measuring'};
+  const ratio=cur/peak;
+  return {state: ratio>=FOCUS_GOOD?'good':ratio<FOCUS_BLUR?'blur':'tuning', score:cur, peak, ratio};
+}
+let focusTimer = null, focusSamples = [], lastLiveSharpness = null;
+function renderFocus(v){
+  const el=qs('#cameraFocus'); if(!el) return;
+  const T={measuring:['⏳ Midiendo enfoque…','var(--muted)'],good:['🟢 Enfoque bueno','var(--green)'],tuning:['🟡 Afinando enfoque…','var(--orange)'],blur:['🔴 Parece borroso, mantén firme','var(--red)']}[v.state];
+  el.textContent=T[0]+(v.score!=null?` · nitidez ${Math.round(v.score)}`:'');
+  el.style.color=T[1]; el.style.borderColor=T[1];
+}
+function startFocusMonitor(){
+  stopFocusMonitor(); focusSamples=[];
+  focusTimer=setInterval(()=>{
+    const v=qs('#cameraVideo'); if(!v||!v.videoWidth||v.readyState<2||document.hidden) return;
+    const s=sharpnessOf(v,v.videoWidth,v.videoHeight); if(s==null) return;
+    const now=Date.now(); lastLiveSharpness=s;
+    focusSamples.push({t:now,s});
+    while(focusSamples.length&&focusSamples[0].t<now-8000) focusSamples.shift();
+    renderFocus(focusVerdict(focusSamples,now));
+  },300);
+}
+function stopFocusMonitor(){
+  if(focusTimer){ clearInterval(focusTimer); focusTimer=null; }
+  const el=qs('#cameraFocus'); if(el){ el.textContent=''; }
+}
+
 function startCameraStream(videoConstraints){
   const video=qs('#cameraVideo'), errEl=qs('#cameraError'), btnSwitch=qs('#btnSwitchCamera');
+  stopFocusMonitor();
   if(cameraStream){cameraStream.getTracks().forEach(t=>t.stop());cameraStream=null;}
   navigator.mediaDevices.getUserMedia({
     video: Object.assign({}, CAMERA_IDEAL_SIZE, videoConstraints)
@@ -1215,6 +1300,7 @@ function startCameraStream(videoConstraints){
       }catch(err){ console.log('applyConstraints al máximo falló:', err&&err.name); }
     }
     updateCameraResInfo();
+    startFocusMonitor();
     /* Los deviceId/label de enumerateDevices() solo vienen completos
        una vez concedido el permiso — por eso se enumera aquí y no antes. */
     try {
@@ -1270,6 +1356,7 @@ window.switchCamera = function(){
 };
 
 window.closeCameraModal = function(){
+  stopFocusMonitor();
   if(cameraStream){cameraStream.getTracks().forEach(t=>t.stop());cameraStream=null;}
   const video=qs('#cameraVideo'); if(video) video.srcObject=null;
   const modal=qs('#cameraModal'); if(modal) modal.style.display='none';
@@ -1285,7 +1372,7 @@ window.captureCameraPhoto = function(){
   canvas.getContext('2d').drawImage(video,0,0);
   let q=0.92, dataUrl=canvas.toDataURL('image/jpeg',q);
   while(dataUrl.length>MAX_CAPTURE_CHARS&&q>0.5){ q-=0.1; dataUrl=canvas.toDataURL('image/jpeg',q); }
-  console.log(`CAPTURA: frame ${canvas.width}×${canvas.height}, JPEG q=${q.toFixed(2)}, base64=${dataUrl.length} car. (~${(dataUrl.length*0.75/1048576).toFixed(2)} MB)`);
+  console.log(`CAPTURA: frame ${canvas.width}×${canvas.height}, JPEG q=${q.toFixed(2)}, base64=${dataUrl.length} car. (~${(dataUrl.length*0.75/1048576).toFixed(2)} MB), nitidez en vivo=${lastLiveSharpness}`);
   const mode=cameraTargetMode;
   closeCameraModal();
   if(mode==='single'){
@@ -1311,6 +1398,7 @@ async function runCountAI() {
   setStatus('statusCount','🔍 Claude está analizando la imagen…');qs('#statusCount').style.color='';
   qs('#confWarning').style.display='none';
   qs('#overlapWarning').style.display='none';
+  { const dw=qs('#densityWarning'); if(dw)dw.style.display='none'; }
   qs('#albaranResult').style.display='none';qs('#resultsCount').style.display='none';
   qs('#manualAdj').style.display='none';qs('#btnSaveExample').style.display='none';
   qs('#btnZones').style.display='none'; exitZonesView();
@@ -1427,6 +1515,15 @@ async function runCountAI() {
        "overlap" del JSON (antes se buscaban palabras clave en las notas y
        una nota tipo "no hay solapamiento" disparaba un falso positivo). */
     checkOverlapNotice(result.overlap);
+    /* v9.3: la alerta de densidad solo existía en multifoto; en el muestreo limpio los 3 outliers
+       (8mm 54, 4mm 50, 12mm 38) estaban por encima del máximo recomendado y no avisó nada. */
+    { const dw=qs('#densityWarning'), lim=sizeMode==='single'?MULTI_MAX_PER_PHOTO[singleSize]:null;
+      if(dw){
+        if(lim&&total>lim){
+          dw.textContent=`⚠️ Densidad alta: ${total} uds (recomendado ≤${lim} para ${singleSize}mm) — el conteo pierde precisión; mejor repartir en 2 fotos con Multifoto`;
+          dw.style.display='block';
+        } else dw.style.display='none';
+      } }
 
     drawOverlay(total,confidence);
     qs('#resultsCount').style.display='block';qs('#manualAdj').style.display='flex';qs('#btnSaveExample').style.display='flex';qs('#btnZones').style.display='';
@@ -1447,6 +1544,7 @@ async function runCountAI() {
       // ODOO - pendiente de implementar: odoo:buildOdooText()
     };
     if(lastCaptureMethod)historyEntry.captureMethod=lastCaptureMethod;
+    if(typeof lastSharpness==='number')historyEntry.sharpness=lastSharpness;
     if(mismatchSize){
       /* NO se guarda todavía: espera a "Repetir con Xmm" (se descarta) o "Mantener". */
       lastVisionEntryId=null;
@@ -2291,6 +2389,8 @@ window.renderHistory=function(){
         ?`<span style="font-size:11px;font-weight:700;color:var(--green);border:1px solid var(--green);padding:2px 9px;border-radius:10px">📷 Cámara en vivo</span>`
         :`<span style="font-size:11px;font-weight:700;color:var(--muted);border:1px solid var(--muted);padding:2px 9px;border-radius:10px">📁 Archivo subido</span>`)
       :'';
+    const sharpHtml=(!isMulti&&!isWeigh&&typeof e.sharpness==='number')
+      ?`<span title="Nitidez: varianza del Laplaciano a 480 px (más alto = más nítida)" style="font-size:11px;color:var(--hint)">🔍 nitidez ${Math.round(e.sharpness)}</span>`:'';
     const chip=(text,corrected)=>`<span style="display:inline-block;font-size:12px;font-weight:600;padding:3px 8px;border-radius:8px;background:var(--surface2);border:0.5px solid ${corrected?'var(--orange)':'var(--border2)'};color:${corrected?'var(--orange)':'var(--text)'};margin:0 6px 6px 0">📷 ${text}</span>`;
     const photoBreakdownHtml=Array.isArray(e.photoBreakdown)&&e.photoBreakdown.length>0
       ?`<div style="margin-bottom:4px">
@@ -2315,6 +2415,7 @@ window.renderHistory=function(){
       <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;align-items:center">
         ${multiBadge}
         ${methodBadge}
+        ${sharpHtml}
         ${sizeBadge}
         ${e.albaran?`<span style="font-size:11px;color:var(--muted)">Albarán:${e.albaran}</span>`:''}
       </div>
