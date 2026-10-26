@@ -1,4 +1,20 @@
 /* ══════════════════════════════════════════
+   Pellet Counter v9.4 — estabilidad del disparo y exposición
+   Dato del usuario: nitidez en vivo 13354.8 vs 2375.3 en la foto capturada
+   (-82%): el gesto de pulsar "Capturar" con una mano mueve la tablet.
+   1 DISPARO AUTOMÁTICO (opcional, desactivado por defecto): con el enfoque en
+          🟢 sostenido ~1.5 s (y ≥3.5 s tras abrir el visor) se cuenta atrás y
+          se dispara solo; si el enfoque sale de 🟢 se cancela. Guardado en
+          localStorage 'autoShot'.
+   2 FIJAR EXPOSICIÓN Y BLANCOS (opcional, 'lockExposure'): a los 2.5 s de abrir
+          el stream, lee exposureTime/colorTemperature ACTUALES y los aplica en
+          modo manual (advanced constraints); luego VERIFICA con getSettings()
+          y lo dice en pantalla/log. Si la cámara no expone modo manual o los
+          valores actuales, no toca nada. Al desactivarlo vuelve a continuous.
+   3 DIAGNÓSTICO: al disparar se loguea la nitidez en ese instante (no solo la
+          última lectura en vivo) y exposición/blancos reales; la foto única
+          guarda cam:{lock,exp,ct} en el historial.
+   ══════════════════════════════════════════
    Pellet Counter v9.3 — tras el muestreo limpio (15 análisis, ±0.75-1 sin outliers)
    1 OUTLIERS: los 3 estaban POR ENCIMA del máximo recomendado por foto (8mm 54>40,
           4mm 50>30, 12mm 38>30) pero la alerta de densidad solo existía en
@@ -420,7 +436,7 @@
    Fix: JSON parser robusto
    ══════════════════════════════════════════ */
 
-const VERSION = 'v9.3';
+const VERSION = 'v9.4';
 /* Límite de tokens de la respuesta en conteo (foto única, multifoto y reintento). 300 cortaba el 87% de las respuestas. */
 const COUNT_MAX_TOKENS = 600;
 
@@ -452,6 +468,7 @@ let lastConfidence  = null;
 let lastCaptureMethod = null;
 /* v9.3: nitidez (varianza del Laplaciano) de la foto única actual, medida igual para cámara y archivo */
 let lastSharpness = null;
+let lastCamMeta = null;   /* v9.4: {lock,exp,ct} de la foto de cámara actual */
 /* v8.2: id de la entrada del historial que el ajuste ±1 puede modificar
    (null mientras haya un aviso de tamaño sin resolver: esa entrada aún
    no está guardada, ver pendingMismatchEntry). */
@@ -1089,6 +1106,7 @@ function processSinglePhotoDataUrl(dataUrl, mime, method) {
   lastImageMime=mime;
   lastCaptureMethod=method||null;
   lastSharpness=null;
+  if(method!=='camera') lastCamMeta=null;
   const img=new Image();
   img.onload=()=>{
     lastSharpness=sharpnessOf(img,img.naturalWidth,img.naturalHeight);
@@ -1257,31 +1275,97 @@ function focusVerdict(samples, now){
   return {state: ratio>=FOCUS_GOOD?'good':ratio<FOCUS_BLUR?'blur':'tuning', score:cur, peak, ratio};
 }
 let focusTimer = null, focusSamples = [], lastLiveSharpness = null;
-function renderFocus(v){
+const FOCUS_TICK_MS = 300, AUTO_TICKS = 5, AUTO_MIN_AGE_MS = 3500;
+let autoGreen = 0, monitorStart = 0;
+function autoShotOn(){ try{ return localStorage.getItem('autoShot')==='1'; }catch(e){ return false; } }
+function lockExposureOn(){ try{ return localStorage.getItem('lockExposure')==='1'; }catch(e){ return false; } }
+function renderFocus(v,autoLeftMs){
   const el=qs('#cameraFocus'); if(!el) return;
   const T={measuring:['⏳ Midiendo enfoque…','var(--muted)'],good:['🟢 Enfoque bueno','var(--green)'],tuning:['🟡 Afinando enfoque…','var(--orange)'],blur:['🔴 Parece borroso, mantén firme','var(--red)']}[v.state];
-  el.textContent=T[0]+(v.score!=null?` · nitidez ${Math.round(v.score)}`:'');
+  el.textContent=T[0]+(v.score!=null?` · nitidez ${Math.round(v.score)}`:'')+(autoLeftMs==null?'':(autoLeftMs>0?` · disparo en ${(autoLeftMs/1000).toFixed(1)} s`:' · disparando…'));
   el.style.color=T[1]; el.style.borderColor=T[1];
 }
 function startFocusMonitor(){
-  stopFocusMonitor(); focusSamples=[];
+  stopFocusMonitor(); focusSamples=[]; autoGreen=0; monitorStart=Date.now();
   focusTimer=setInterval(()=>{
     const v=qs('#cameraVideo'); if(!v||!v.videoWidth||v.readyState<2||document.hidden) return;
     const s=sharpnessOf(v,v.videoWidth,v.videoHeight); if(s==null) return;
     const now=Date.now(); lastLiveSharpness=s;
     focusSamples.push({t:now,s});
     while(focusSamples.length&&focusSamples[0].t<now-8000) focusSamples.shift();
-    renderFocus(focusVerdict(focusSamples,now));
-  },300);
+    const verdict=focusVerdict(focusSamples,now);
+    let autoLeft=null;
+    if(autoShotOn()){
+      if(verdict.state==='good'&&now-monitorStart>=AUTO_MIN_AGE_MS){
+        autoGreen++;
+        autoLeft=Math.max(0,(AUTO_TICKS-autoGreen)*FOCUS_TICK_MS);
+        if(autoGreen>=AUTO_TICKS){
+          autoGreen=0;
+          console.log(`DISPARO AUTOMÁTICO: enfoque 🟢 sostenido ${AUTO_TICKS} lecturas, nitidez ${Math.round(verdict.score)} (pico ${Math.round(verdict.peak)})`);
+          captureCameraPhoto(); return;
+        }
+      } else { autoGreen=0; }
+    }
+    renderFocus(verdict,autoLeft);
+  },FOCUS_TICK_MS);
 }
 function stopFocusMonitor(){
   if(focusTimer){ clearInterval(focusTimer); focusTimer=null; }
   const el=qs('#cameraFocus'); if(el){ el.textContent=''; }
 }
 
+/* ══ FIJAR EXPOSICIÓN Y BALANCE DE BLANCOS (v9.4) ══
+   Los pellets cambian de tono con la luz; con exposición/blancos continuos la
+   cámara reajusta entre fotos. Se lee el valor ACTUAL (exposureTime en
+   unidades de 100 µs, colorTemperature en K) y se aplica en modo manual. No
+   todas las cámaras lo permiten: se comprueba capabilities, y tras aplicar se
+   verifica con getSettings() — si no quedó en manual, se dice. */
+let lockTimer = null, camLocked = false;
+function camInfo(msg){ const el=qs('#cameraLockInfo'); if(el) el.textContent=msg||''; }
+async function applyExposureLock(){
+  const track=cameraStream&&cameraStream.getVideoTracks()[0]; if(!track) return;
+  const s=track.getSettings?track.getSettings():{};
+  let caps={}; try{ caps=track.getCapabilities?track.getCapabilities():{}; }catch(e){}
+  const canExp=!!(caps.exposureMode&&caps.exposureMode.includes('manual')&&typeof s.exposureTime==='number');
+  const canWb=!!(caps.whiteBalanceMode&&caps.whiteBalanceMode.includes('manual')&&typeof s.colorTemperature==='number');
+  console.log('BLOQUEO exposición/blancos — antes:',JSON.stringify({exposureMode:s.exposureMode,exposureTime:s.exposureTime,whiteBalanceMode:s.whiteBalanceMode,colorTemperature:s.colorTemperature,iso:s.iso}),'· capabilities:',JSON.stringify({exposureMode:caps.exposureMode,whiteBalanceMode:caps.whiteBalanceMode,exposureTime:caps.exposureTime,colorTemperature:caps.colorTemperature}));
+  if(!canExp&&!canWb){ camLocked=false; camInfo('🔓 Esta cámara/navegador no permite fijar exposición ni blancos (ver log)'); console.log('BLOQUEO: no soportado (falta modo manual o valores actuales en getSettings)'); return; }
+  const adv={};
+  if(canExp){ adv.exposureMode='manual'; adv.exposureTime=s.exposureTime; }
+  if(canWb){ adv.whiteBalanceMode='manual'; adv.colorTemperature=s.colorTemperature; }
+  try{ await track.applyConstraints({advanced:[adv]}); }catch(err){ camLocked=false; camInfo('🔓 No se pudo fijar: '+(err&&err.name)); console.log('BLOQUEO falló:',err&&err.name,err&&err.message); return; }
+  const a=track.getSettings?track.getSettings():{};
+  const okExp=canExp&&a.exposureMode==='manual', okWb=canWb&&a.whiteBalanceMode==='manual';
+  camLocked=okExp||okWb;
+  console.log('BLOQUEO exposición/blancos — después:',JSON.stringify({exposureMode:a.exposureMode,exposureTime:a.exposureTime,whiteBalanceMode:a.whiteBalanceMode,colorTemperature:a.colorTemperature}),'· resultado:',JSON.stringify({exposicion:okExp,blancos:okWb}));
+  camInfo(camLocked?`🔒 Fijado${okExp?` · exposición ${a.exposureTime}`:''}${okWb?` · blancos ${a.colorTemperature} K`:''}${(canExp&&!okExp)||(canWb&&!okWb)?' (parcial: el resto no quedó en manual)':''}`:'🔓 La cámara ignoró el modo manual (ver log)');
+}
+async function releaseExposureLock(){
+  const track=cameraStream&&cameraStream.getVideoTracks()[0]; camLocked=false;
+  if(!track){ camInfo(''); return; }
+  let caps={}; try{ caps=track.getCapabilities?track.getCapabilities():{}; }catch(e){}
+  const adv={};
+  if(caps.exposureMode&&caps.exposureMode.includes('continuous')) adv.exposureMode='continuous';
+  if(caps.whiteBalanceMode&&caps.whiteBalanceMode.includes('continuous')) adv.whiteBalanceMode='continuous';
+  if(Object.keys(adv).length){ try{ await track.applyConstraints({advanced:[adv]}); }catch(err){ console.log('Desbloqueo falló:',err&&err.name); } }
+  console.log('BLOQUEO exposición/blancos liberado');
+  camInfo('');
+}
+function scheduleExposureLock(){
+  if(lockTimer){ clearTimeout(lockTimer); lockTimer=null; }
+  camLocked=false; camInfo(lockExposureOn()?'⏳ Fijando exposición y blancos…':'');
+  if(lockExposureOn()) lockTimer=setTimeout(()=>{ lockTimer=null; applyExposureLock(); },2500);
+}
+window.setAutoShot=function(on){ try{ localStorage.setItem('autoShot',on?'1':'0'); }catch(e){} autoGreen=0; };
+window.setLockExposure=function(on){
+  try{ localStorage.setItem('lockExposure',on?'1':'0'); }catch(e){}
+  if(on) applyExposureLock(); else { if(lockTimer){ clearTimeout(lockTimer); lockTimer=null; } releaseExposureLock(); }
+};
+
 function startCameraStream(videoConstraints){
   const video=qs('#cameraVideo'), errEl=qs('#cameraError'), btnSwitch=qs('#btnSwitchCamera');
   stopFocusMonitor();
+  if(lockTimer){ clearTimeout(lockTimer); lockTimer=null; }
   if(cameraStream){cameraStream.getTracks().forEach(t=>t.stop());cameraStream=null;}
   navigator.mediaDevices.getUserMedia({
     video: Object.assign({}, CAMERA_IDEAL_SIZE, videoConstraints)
@@ -1301,6 +1385,7 @@ function startCameraStream(videoConstraints){
     }
     updateCameraResInfo();
     startFocusMonitor();
+    scheduleExposureLock();
     /* Los deviceId/label de enumerateDevices() solo vienen completos
        una vez concedido el permiso — por eso se enumera aquí y no antes. */
     try {
@@ -1328,6 +1413,7 @@ window.openCameraModal = function(mode){
   const modal=qs('#cameraModal'), errEl=qs('#cameraError'), btnSwitch=qs('#btnSwitchCamera');
   errEl.style.display='none'; errEl.textContent='';
   if(btnSwitch) btnSwitch.style.display='none';
+  { const a=qs('#chkAutoShot'), l=qs('#chkLockExp'); if(a)a.checked=autoShotOn(); if(l)l.checked=lockExposureOn(); }
   modal.style.display='flex';
   /* v8.5: pantalla completa real (oculta la barra del navegador) — como la
      cámara de Windows. Requiere gesto de usuario (esta función se llama
@@ -1357,6 +1443,8 @@ window.switchCamera = function(){
 
 window.closeCameraModal = function(){
   stopFocusMonitor();
+  if(lockTimer){ clearTimeout(lockTimer); lockTimer=null; }
+  camLocked=false;
   if(cameraStream){cameraStream.getTracks().forEach(t=>t.stop());cameraStream=null;}
   const video=qs('#cameraVideo'); if(video) video.srcObject=null;
   const modal=qs('#cameraModal'); if(modal) modal.style.display='none';
@@ -1368,11 +1456,16 @@ window.captureCameraPhoto = function(){
   const video=qs('#cameraVideo');
   if(!video||!video.videoWidth) return; // stream aún no listo
   const canvas=qs('#cameraCaptureCanvas');
+  /* v9.4: nitidez EN ESTE instante (no la última lectura, que puede ser de hace 300 ms) y ajustes reales de la cámara */
+  const sharpNow=sharpnessOf(video,video.videoWidth,video.videoHeight);
+  { const tr=cameraStream&&cameraStream.getVideoTracks()[0], st=(tr&&tr.getSettings)?tr.getSettings():{};
+    lastCamMeta={lock:!!camLocked,exp:typeof st.exposureTime==='number'?st.exposureTime:null,ct:typeof st.colorTemperature==='number'?st.colorTemperature:null};
+    console.log('CAPTURA cámara:',JSON.stringify({exposureMode:st.exposureMode,exposureTime:st.exposureTime,whiteBalanceMode:st.whiteBalanceMode,colorTemperature:st.colorTemperature,bloqueado:!!camLocked})); }
   canvas.width=video.videoWidth; canvas.height=video.videoHeight;
   canvas.getContext('2d').drawImage(video,0,0);
   let q=0.92, dataUrl=canvas.toDataURL('image/jpeg',q);
   while(dataUrl.length>MAX_CAPTURE_CHARS&&q>0.5){ q-=0.1; dataUrl=canvas.toDataURL('image/jpeg',q); }
-  console.log(`CAPTURA: frame ${canvas.width}×${canvas.height}, JPEG q=${q.toFixed(2)}, base64=${dataUrl.length} car. (~${(dataUrl.length*0.75/1048576).toFixed(2)} MB), nitidez en vivo=${lastLiveSharpness}`);
+  console.log(`CAPTURA: frame ${canvas.width}×${canvas.height}, JPEG q=${q.toFixed(2)}, base64=${dataUrl.length} car. (~${(dataUrl.length*0.75/1048576).toFixed(2)} MB), nitidez al disparar=${sharpNow} (última lectura en vivo=${lastLiveSharpness})`);
   const mode=cameraTargetMode;
   closeCameraModal();
   if(mode==='single'){
@@ -1545,6 +1638,7 @@ async function runCountAI() {
     };
     if(lastCaptureMethod)historyEntry.captureMethod=lastCaptureMethod;
     if(typeof lastSharpness==='number')historyEntry.sharpness=lastSharpness;
+    if(lastCaptureMethod==='camera'&&lastCamMeta)historyEntry.cam=lastCamMeta;
     if(mismatchSize){
       /* NO se guarda todavía: espera a "Repetir con Xmm" (se descarta) o "Mantener". */
       lastVisionEntryId=null;

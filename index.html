@@ -183,7 +183,7 @@
     <h1>Pellet Counter <span class="ai-badge">✦ Claude AI</span></h1>
     <div style="display:flex;align-items:center;gap:10px">
       <div id="analyzeSpinner" class="spinner"></div>
-      <span class="ver">v9.3</span>
+      <span class="ver">v9.4</span>
     </div>
   </div>
   <div class="subbar" id="exCounts" style="border-bottom:none;padding-bottom:2px"></div>
@@ -581,8 +581,9 @@
       <div class="card">
         <p class="card-label">Acerca de</p>
         <div style="font-size:12px;color:var(--muted);line-height:2.2">
-          <div><strong style="color:var(--text)">Pellet Counter v9.3</strong></div>
+          <div><strong style="color:var(--text)">Pellet Counter v9.4</strong></div>
           <div>Motor IA · Claude Sonnet Vision</div>
+          <div>Visor de cámara · disparo automático con enfoque 🟢 (opcional) y fijar exposición/blancos (opcional)</div>
           <div>Visor de cámara · indicador de enfoque en vivo (🟢/🟡/🔴) y nitidez guardada en el historial</div>
           <div>Densidad alta · el aviso ahora también sale en foto única; perfil 4mm contempla pellets de canto</div>
           <div>Conteo con IA · límite de respuesta 600 tokens (antes 300, que cortaba la respuesta antes del JSON y forzaba el reintento)</div>
@@ -702,6 +703,10 @@
       <!-- v8.3: resolución REAL que entrega la cámara (también en el log de Ajustes) -->
       <!-- v9.3: indicador de nitidez en vivo -->
       <div id="cameraFocus" style="font-size:14px;font-weight:700;text-align:center;padding:8px;border:1px solid var(--border2);border-radius:10px;min-height:20px"></div>
+      <!-- v9.4: opciones del visor (se recuerdan) -->
+      <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text);cursor:pointer"><input type="checkbox" id="chkAutoShot" onchange="setAutoShot(this.checked)" style="width:20px;height:20px;min-height:0;padding:0;flex-shrink:0"> ⚡ Disparo automático cuando el enfoque esté en 🟢</label>
+      <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text);cursor:pointer"><input type="checkbox" id="chkLockExp" onchange="setLockExposure(this.checked)" style="width:20px;height:20px;min-height:0;padding:0;flex-shrink:0"> 🔒 Fijar exposición y balance de blancos</label>
+      <div id="cameraLockInfo" style="font-size:11px;color:var(--hint);text-align:center;min-height:14px"></div>
       <div id="cameraResInfo" style="font-size:12px;color:var(--muted);text-align:center"></div>
       <!-- Solo visible si hay más de una cámara disponible (v8.1 patch) -->
       <button id="btnSwitchCamera" onclick="switchCamera()" style="display:none;width:100%;justify-content:center">🔄 Cambiar cámara</button>
@@ -714,13 +719,13 @@
   <canvas id="cameraCaptureCanvas" style="display:none"></canvas>
 </div>
 
-<!-- splash v9.3 -->
+<!-- splash v9.4 -->
 <div id="splash" style="position:fixed;inset:0;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:9999;transition:opacity 0.4s">
   <div style="font-size:44px;margin-bottom:14px">⬤</div>
   <div style="font-size:20px;font-weight:700;color:var(--text);letter-spacing:-0.5px">Pellet Counter</div>
   <div style="font-size:12px;color:var(--green);font-weight:600;margin-top:6px;display:flex;align-items:center;gap:8px">
     <span>✦ Claude AI</span><span style="color:var(--hint)">·</span>
-    <span style="font-family:monospace;color:var(--blue)">v9.3</span>
+    <span style="font-family:monospace;color:var(--blue)">v9.4</span>
   </div>
   <div style="margin-top:28px;width:60px;height:2px;background:var(--surface2);border-radius:2px;overflow:hidden">
     <div style="height:100%;background:linear-gradient(90deg,var(--blue),var(--green));border-radius:2px;animation:load 1.3s ease-out forwards"></div>
