@@ -1,4 +1,26 @@
 /* ══════════════════════════════════════════
+   Pellet Counter v9.5 — tras el test de 4mm con disparo automático
+   (6 muestras: -11, 0, -2, -6, 0, +1; nitidez al disparar 734 vs 711 en vivo,
+   ~3% frente al 82% de caída con disparo manual → el temblor está resuelto)
+   1 PERFIL 4mm: en los 2 errores grandes (45→34, 38→32) las notas de Claude
+          citan un pellet "on-edge" en una zona densa y "conteo conservador" en
+          TODA la zona. Se acota: la cautela es por pellet ambiguo y NO se
+          extiende al resto. También se sustituye "sé conservador (zona oscura
+          con pellets muy juntos) / mejor quedarse corto 1-2", que era una regla
+          de ZONA, por una regla de PELLET.
+   2 UX DISPARO AUTOMÁTICO: guía de encuadre siempre visible (recuadro del
+          fotograma, zona segura, tercios y centro; casilla para ocultarla),
+          banner "disparo automático activado", cuenta atrás grande en el
+          centro, y al disparar: destello + pitido (casilla "Sonido") + vibración
+          si el dispositivo la tiene. El visor se cierra 250 ms después.
+   3 GUARDAR COMO EJEMPLO DESDE EL HISTORIAL: el historial NUNCA guardó la foto,
+          así que no era posible. Ahora cada análisis de foto única guarda una
+          miniatura (la misma que usaría un ejemplo: ≤400 px, JPEG 0.7) en
+          IndexedDB — no en localStorage, que ya está justo — y en el historial
+          aparece la miniatura y "⭐ Guardar como ejemplo" con el conteo
+          corregido. Las entradas anteriores a v9.5 no tienen foto: no se
+          pueden convertir. Las miniaturas se borran con su entrada.
+   ══════════════════════════════════════════
    Pellet Counter v9.4 — estabilidad del disparo y exposición
    Dato del usuario: nitidez en vivo 13354.8 vs 2375.3 en la foto capturada
    (-82%): el gesto de pulsar "Capturar" con una mano mueve la tablet.
@@ -436,7 +458,7 @@
    Fix: JSON parser robusto
    ══════════════════════════════════════════ */
 
-const VERSION = 'v9.4';
+const VERSION = 'v9.5';
 /* Límite de tokens de la respuesta en conteo (foto única, multifoto y reintento). 300 cortaba el 87% de las respuestas. */
 const COUNT_MAX_TOKENS = 600;
 
@@ -468,6 +490,7 @@ let lastConfidence  = null;
 let lastCaptureMethod = null;
 /* v9.3: nitidez (varianza del Laplaciano) de la foto única actual, medida igual para cámara y archivo */
 let lastSharpness = null;
+let lastThumb = null, thumbToken = 0;   /* v9.5: miniatura (≤400 px) de la foto única actual, para el historial */
 let lastCamMeta = null;   /* v9.4: {lock,exp,ct} de la foto de cámara actual */
 /* v8.2: id de la entrada del historial que el ajuste ±1 puede modificar
    (null mientras haya un aviso de tamaño sin resolver: esa entrada aún
@@ -508,7 +531,7 @@ const qs  = s => document.querySelector(s);
 const qsa = s => document.querySelectorAll(s);
 
 const PELLET_PROFILES = {
-  '4': "Electrodos de disco sinterizado de 4mm de diámetro, de aplicación médica — NO son condensadores cerámicos, resistencias ni ningún otro componente electrónico, aunque el disco pequeño con un hilo metálico pueda recordar a uno. Son los discos MÁS PEQUEÑOS de la imagen — significativamente más pequeños que los de 8mm y 12mm. Color rosado o marrón claro cuando son nuevos, se vuelven gris oscuro o marrón oscuro con la exposición a la luz — ambos colores son el mismo producto. Pesan aproximadamente 0.08g cada uno. Tienen un hilo fino metálico saliendo del centro, muy difícil de ver a esta escala. INSTRUCCIONES CRÍTICAS: son extremadamente pequeños y tienden a agruparse. Si ves una zona con varios puntos oscuros juntos, asume que son múltiples discos individuales y cuenta cada punto circular por separado. Cuenta cada disco individualmente aunque se toquen o solapen. Ignora los hilos metálicos sueltos — son líneas finas, no discos (salvo el hilo de un pellet de canto, ver la nota siguiente). Algunos pellets pueden estar de canto o inclinados, mostrando principalmente el hilo metálico y solo el borde del disco. Cuenta estos casos igual que los que están planos — no los ignores ni los confundas con restos de hilo suelto. ATENCIÓN AL SOBRECONTEO: estos pellets son muy pequeños y tienden a aparecer más de lo que realmente son. Si dudas entre N y N+1, elige siempre el número menor. Cuando veas una zona oscura con pellets muy juntos, sé conservador — es mejor quedarse corto 1-2 unidades que pasarse.",
+  '4': "Electrodos de disco sinterizado de 4mm de diámetro, de aplicación médica — NO son condensadores cerámicos, resistencias ni ningún otro componente electrónico, aunque el disco pequeño con un hilo metálico pueda recordar a uno. Son los discos MÁS PEQUEÑOS de la imagen — significativamente más pequeños que los de 8mm y 12mm. Color rosado o marrón claro cuando son nuevos, se vuelven gris oscuro o marrón oscuro con la exposición a la luz — ambos colores son el mismo producto. Pesan aproximadamente 0.08g cada uno. Tienen un hilo fino metálico saliendo del centro, muy difícil de ver a esta escala. INSTRUCCIONES CRÍTICAS: son extremadamente pequeños y tienden a agruparse. Si ves una zona con varios puntos oscuros juntos, asume que son múltiples discos individuales y cuenta cada punto circular por separado. Cuenta cada disco individualmente aunque se toquen o solapen. Ignora los hilos metálicos sueltos — son líneas finas, no discos (salvo el hilo de un pellet de canto, ver la nota siguiente). Algunos pellets pueden estar de canto o inclinados, mostrando principalmente el hilo metálico y solo el borde del disco. Cuenta estos casos igual que los que están planos — no los ignores ni los confundas con restos de hilo suelto. Si un pellet de canto o ambiguo aparece dentro de una zona densa, decide únicamente sobre ESE pellet: no apliques un conteo conservador ni restes unidades al resto de la zona. ATENCIÓN AL SOBRECONTEO: estos pellets son muy pequeños y tienden a aparecer más de lo que realmente son. Si dudas entre N y N+1 sobre un pellet CONCRETO, elige el menor solo para ese pellet. Esa cautela es individual: NO la extiendas a los demás pellets de la zona — cuenta cada disco plano y claramente visible de la zona de forma normal, uno a uno, aunque haya un pellet ambiguo a su lado.",
   '8': "Electrodos de disco sinterizado de 8mm de diámetro, de aplicación médica — NO son condensadores cerámicos, resistencias ni ningún otro componente electrónico, aunque el disco con un hilo metálico pueda recordar a uno. Son discos de tamaño MEDIANO — más pequeños que los de 12mm pero claramente más grandes que los de 4mm. Color rosado, malva o marrón dependiendo de la exposición a la luz. Pesan aproximadamente 0.32g cada uno. Tienen un hilo fino metálico saliendo del centro. Cuando dos discos se toquen o solapen parcialmente cuenta cada uno como unidad independiente. Si hay solapamiento en zona central agrupa visualmente y estima cuántos discos hay en esa zona. Ignora completamente los hilos metálicos.",
   '12': "Electrodos de disco sinterizado de 12mm de diámetro, de aplicación médica — NO son condensadores cerámicos, resistencias ni ningún otro componente electrónico, aunque el disco con un hilo metálico pueda recordar a uno. Son los discos MÁS GRANDES de la imagen — notablemente más grandes que los de 8mm. Color rosado, malva o marrón dependiendo de la exposición a la luz — pueden verse claros (rosado/beige) o más oscuros (marrón). Pesan aproximadamente 0.70g cada uno. Tienen un hilo fino metálico de conexión saliendo del centro, a veces doblado o pegado al disco y difícil de ver. Al ser grandes son fáciles de distinguir individualmente. Cuenta cada disco circular grande por separado aunque se toquen en los bordes. Ignora completamente los hilos metálicos."
 };
@@ -1107,6 +1130,8 @@ function processSinglePhotoDataUrl(dataUrl, mime, method) {
   lastCaptureMethod=method||null;
   lastSharpness=null;
   if(method!=='camera') lastCamMeta=null;
+  lastThumb=null; const myThumb=++thumbToken;
+  resizeImageBase64(dataUrl.split(',')[1],mime,EXAMPLE_MAX_DIM).then(t=>{ if(myThumb===thumbToken) lastThumb=t; }).catch(()=>{});
   const img=new Image();
   img.onload=()=>{
     lastSharpness=sharpnessOf(img,img.naturalWidth,img.naturalHeight);
@@ -1275,9 +1300,11 @@ function focusVerdict(samples, now){
   return {state: ratio>=FOCUS_GOOD?'good':ratio<FOCUS_BLUR?'blur':'tuning', score:cur, peak, ratio};
 }
 let focusTimer = null, focusSamples = [], lastLiveSharpness = null;
-const FOCUS_TICK_MS = 300, AUTO_TICKS = 5, AUTO_MIN_AGE_MS = 3500;
+const FOCUS_TICK_MS = 300, AUTO_TICKS = 5, AUTO_MIN_AGE_MS = 3500, AUTO_CLOSE_DELAY_MS = 250;
 let autoGreen = 0, monitorStart = 0;
 function autoShotOn(){ try{ return localStorage.getItem('autoShot')==='1'; }catch(e){ return false; } }
+function guideOn(){ try{ return localStorage.getItem('frameGuide')!=='0'; }catch(e){ return true; } }
+function soundOn(){ try{ return localStorage.getItem('shotSound')!=='0'; }catch(e){ return true; } }
 function lockExposureOn(){ try{ return localStorage.getItem('lockExposure')==='1'; }catch(e){ return false; } }
 function renderFocus(v,autoLeftMs){
   const el=qs('#cameraFocus'); if(!el) return;
@@ -1302,15 +1329,18 @@ function startFocusMonitor(){
         if(autoGreen>=AUTO_TICKS){
           autoGreen=0;
           console.log(`DISPARO AUTOMÁTICO: enfoque 🟢 sostenido ${AUTO_TICKS} lecturas, nitidez ${Math.round(verdict.score)} (pico ${Math.round(verdict.peak)})`);
-          captureCameraPhoto(); return;
+          captureCameraPhoto({auto:true}); return;
         }
       } else { autoGreen=0; }
     }
     renderFocus(verdict,autoLeft);
+    renderAutoCountdown(autoLeft);
+    layoutCameraGuide();
   },FOCUS_TICK_MS);
 }
 function stopFocusMonitor(){
   if(focusTimer){ clearInterval(focusTimer); focusTimer=null; }
+  renderAutoCountdown(null);
   const el=qs('#cameraFocus'); if(el){ el.textContent=''; }
 }
 
@@ -1356,7 +1386,53 @@ function scheduleExposureLock(){
   camLocked=false; camInfo(lockExposureOn()?'⏳ Fijando exposición y blancos…':'');
   if(lockExposureOn()) lockTimer=setTimeout(()=>{ lockTimer=null; applyExposureLock(); },2500);
 }
-window.setAutoShot=function(on){ try{ localStorage.setItem('autoShot',on?'1':'0'); }catch(e){} autoGreen=0; };
+window.setAutoShot=function(on){ try{ localStorage.setItem('autoShot',on?'1':'0'); }catch(e){} autoGreen=0; if(on) getAudioCtx(); renderAutoBanner(); renderAutoCountdown(null); };
+window.setFrameGuide=function(on){ try{ localStorage.setItem('frameGuide',on?'1':'0'); }catch(e){} layoutCameraGuide(); };
+window.setShotSound=function(on){ try{ localStorage.setItem('shotSound',on?'1':'0'); }catch(e){} if(on){ getAudioCtx(); beep(880,0.08); } };
+
+/* ══ UX DEL DISPARO AUTOMÁTICO (v9.5) ══ */
+let audioCtx = null;
+function getAudioCtx(){
+  try{
+    if(!audioCtx){ const AC=window.AudioContext||window.webkitAudioContext; if(AC) audioCtx=new AC(); }
+    if(audioCtx&&audioCtx.state==='suspended') audioCtx.resume();
+  }catch(e){}
+  return audioCtx;
+}
+function beep(freq,dur,delay){
+  try{
+    const ctx=getAudioCtx(); if(!ctx) return;
+    const t0=ctx.currentTime+(delay||0), o=ctx.createOscillator(), g=ctx.createGain();
+    o.type='sine'; o.frequency.value=freq; g.gain.setValueAtTime(0.0001,t0); g.gain.exponentialRampToValueAtTime(0.25,t0+0.01); g.gain.exponentialRampToValueAtTime(0.0001,t0+dur);
+    o.connect(g); g.connect(ctx.destination); o.start(t0); o.stop(t0+dur+0.02);
+  }catch(e){}
+}
+/* Señal en el instante del disparo automático: destello + pitido doble + vibración (si existe) */
+function shutterFeedback(){
+  const f=qs('#shotFlash'); if(f){ f.style.transition='none'; f.style.opacity='0.85'; requestAnimationFrame(()=>{ f.style.transition='opacity .25s'; f.style.opacity='0'; }); }
+  if(soundOn()){ beep(1200,0.09,0); beep(1800,0.12,0.11); }
+  try{ if(navigator.vibrate) navigator.vibrate(80); }catch(e){}
+}
+function renderAutoBanner(){
+  const el=qs('#autoShotBanner'); if(!el) return;
+  el.style.display=autoShotOn()?'block':'none';
+}
+/* Cuenta atrás grande en el centro del visor (ms restantes) o null para ocultarla */
+function renderAutoCountdown(leftMs){
+  const el=qs('#autoShotCount'); if(!el) return;
+  if(leftMs==null||!autoShotOn()){ el.style.display='none'; return; }
+  el.textContent=leftMs>0?`📸 ${(leftMs/1000).toFixed(1)}`:'📸';
+  el.style.display='flex';
+}
+/* La guía se superpone EXACTAMENTE al fotograma mostrado (el vídeo va en "contain", con barras) */
+function layoutCameraGuide(){
+  const g=qs('#cameraGuide'), wrap=qs('#cameraPreviewWrap'), v=qs('#cameraVideo'); if(!g||!wrap||!v) return;
+  if(!guideOn()||!v.videoWidth||!v.videoHeight){ g.style.display='none'; return; }
+  const cw=wrap.clientWidth, ch=wrap.clientHeight, va=v.videoWidth/v.videoHeight;
+  let w,h; if(cw/ch>va){ h=ch; w=ch*va; } else { w=cw; h=cw/va; }
+  g.style.display='block'; g.style.left=((cw-w)/2)+'px'; g.style.top=((ch-h)/2)+'px'; g.style.width=w+'px'; g.style.height=h+'px';
+}
+window.addEventListener('resize',()=>{ if(qs('#cameraModal')&&qs('#cameraModal').style.display!=='none') layoutCameraGuide(); });
 window.setLockExposure=function(on){
   try{ localStorage.setItem('lockExposure',on?'1':'0'); }catch(e){}
   if(on) applyExposureLock(); else { if(lockTimer){ clearTimeout(lockTimer); lockTimer=null; } releaseExposureLock(); }
@@ -1372,7 +1448,7 @@ function startCameraStream(videoConstraints){
   }).then(async stream=>{
     cameraStream=stream;
     video.srcObject=stream;
-    video.onloadedmetadata=updateCameraResInfo; video.onresize=updateCameraResInfo;
+    video.onloadedmetadata=()=>{ updateCameraResInfo(); layoutCameraGuide(); }; video.onresize=()=>{ updateCameraResInfo(); layoutCameraGuide(); };
     errEl.style.display='none';
     const info=logCameraSettings(stream,'inicio');
     /* "o el máximo que soporte la cámara": si el modo elegido queda claramente
@@ -1413,7 +1489,8 @@ window.openCameraModal = function(mode){
   const modal=qs('#cameraModal'), errEl=qs('#cameraError'), btnSwitch=qs('#btnSwitchCamera');
   errEl.style.display='none'; errEl.textContent='';
   if(btnSwitch) btnSwitch.style.display='none';
-  { const a=qs('#chkAutoShot'), l=qs('#chkLockExp'); if(a)a.checked=autoShotOn(); if(l)l.checked=lockExposureOn(); }
+  { const a=qs('#chkAutoShot'), l=qs('#chkLockExp'), gd=qs('#chkGuide'), sn=qs('#chkSound'); if(a)a.checked=autoShotOn(); if(l)l.checked=lockExposureOn(); if(gd)gd.checked=guideOn(); if(sn)sn.checked=soundOn(); }
+  getAudioCtx(); renderAutoBanner(); renderAutoCountdown(null); layoutCameraGuide();
   modal.style.display='flex';
   /* v8.5: pantalla completa real (oculta la barra del navegador) — como la
      cámara de Windows. Requiere gesto de usuario (esta función se llama
@@ -1452,9 +1529,11 @@ window.closeCameraModal = function(){
   cameraTargetMode=null; cameraDevices=[]; cameraDeviceIndex=0;
 };
 
-window.captureCameraPhoto = function(){
+window.captureCameraPhoto = function(opts){
+  const auto=!!(opts&&opts.auto===true);
   const video=qs('#cameraVideo');
   if(!video||!video.videoWidth) return; // stream aún no listo
+  if(auto) stopFocusMonitor();   /* un solo disparo: el monitor ya no puede volver a disparar */
   const canvas=qs('#cameraCaptureCanvas');
   /* v9.4: nitidez EN ESTE instante (no la última lectura, que puede ser de hace 300 ms) y ajustes reales de la cámara */
   const sharpNow=sharpnessOf(video,video.videoWidth,video.videoHeight);
@@ -1467,7 +1546,7 @@ window.captureCameraPhoto = function(){
   while(dataUrl.length>MAX_CAPTURE_CHARS&&q>0.5){ q-=0.1; dataUrl=canvas.toDataURL('image/jpeg',q); }
   console.log(`CAPTURA: frame ${canvas.width}×${canvas.height}, JPEG q=${q.toFixed(2)}, base64=${dataUrl.length} car. (~${(dataUrl.length*0.75/1048576).toFixed(2)} MB), nitidez al disparar=${sharpNow} (última lectura en vivo=${lastLiveSharpness})`);
   const mode=cameraTargetMode;
-  closeCameraModal();
+  if(auto){ shutterFeedback(); setTimeout(closeCameraModal,AUTO_CLOSE_DELAY_MS); } else closeCameraModal();
   if(mode==='single'){
     processSinglePhotoDataUrl(dataUrl,'image/jpeg','camera');
   } else if(mode==='multi'){
@@ -1639,6 +1718,7 @@ async function runCountAI() {
     if(lastCaptureMethod)historyEntry.captureMethod=lastCaptureMethod;
     if(typeof lastSharpness==='number')historyEntry.sharpness=lastSharpness;
     if(lastCaptureMethod==='camera'&&lastCamMeta)historyEntry.cam=lastCamMeta;
+    if(lastThumb&&sizeMode==='single')historyEntry._thumb=lastThumb;   /* se guarda en IndexedDB, no en localStorage */
     if(mismatchSize){
       /* NO se guarda todavía: espera a "Repetir con Xmm" (se descarta) o "Mantener". */
       lastVisionEntryId=null;
@@ -1927,6 +2007,50 @@ function warnIfStorageNearLimit() {
   }
 }
 
+/* Guarda un ejemplo nuevo respetando el tope POR TAMAÑO (v8.2): si se supera, se
+   reemplaza el más antiguo DEL MISMO tamaño — nunca uno de otro tamaño — y se
+   avisa. Devuelve true si se guardó. */
+async function persistNewExample(entry) {
+  let examples = getReferenceExamples();
+  examples.push(entry);
+  const groupOf = e => e.size || 'other';
+  let replaced = null;
+  const sameGroup = examples.filter(e => groupOf(e) === groupOf(entry));
+  if (sameGroup.length > MAX_EXAMPLES_PER_SIZE) {
+    replaced = sameGroup[0];
+    examples = examples.filter(e => e.id !== replaced.id);
+  }
+  if (!persistReferenceExamples(examples)) {
+    showBigToast('No se pudo guardar: almacenamiento lleno. NO se ha borrado nada — libera espacio en Ajustes.', true);
+    renderStorageInfo();
+    return false;
+  }
+  const sizeCount = entry.size ? examples.filter(e => e.size === entry.size).length : null;
+  const replNote = replaced ? ` · límite de ${MAX_EXAMPLES_PER_SIZE} alcanzado: se reemplazó el más antiguo` : '';
+  if (entry.size && sizeCount === FEWSHOT_TARGET) {
+    showBigToast(`¡Few-shot activo para ${entry.size}mm! (${FEWSHOT_TARGET} ejemplos)`);
+  } else if (entry.size) {
+    showBigToast(`✓ Ejemplo ${entry.size}mm guardado (${sizeCount}/${FEWSHOT_TARGET})${replNote}`);
+  } else {
+    showBigToast(`✓ Ejemplo guardado (${examples.length} en total)${replNote}`);
+  }
+  vibrateShort();
+  renderExamplesSettings();
+  renderHistoryExamples();
+  renderExampleCounts();
+  updateFewshotNotice();
+  renderStorageInfo();
+  warnIfStorageNearLimit();
+  return true;
+}
+/* v9.5: la entrada del historial recuerda qué ejemplo salió de ella (evita duplicarlo) */
+function markHistoryExample(historyId, exampleId) {
+  if (!historyId) return;
+  const h = loadHistory(), i = h.findIndex(e => e.id === historyId); if (i < 0) return;
+  h[i].exampleId = exampleId;
+  localStorage.setItem('analysisHistory', JSON.stringify(h));
+}
+
 window.saveAsExample = async function() {
   if(!lastImageBase64){showBigToast('No hay foto para guardar',true);return;}
   try {
@@ -1945,42 +2069,52 @@ window.saveAsExample = async function() {
        comparar después, foto por foto, con la visión clásica (Ajustes → 🧪). */
     const srcEntry = lastVisionEntryId ? loadHistory().find(e => e.id === lastVisionEntryId) : null;
     if (srcEntry && typeof srcEntry.aiTotal === 'number') entry.aiTotal = srcEntry.aiTotal;
-    let examples = getReferenceExamples();
-    examples.push(entry);
-    /* Tope POR TAMAÑO (v8.2): si se supera, se reemplaza el ejemplo más
-       antiguo DEL MISMO tamaño — nunca uno de otro tamaño — y se avisa. */
-    const groupOf = e => e.size || 'other';
-    let replaced = null;
-    const sameGroup = examples.filter(e => groupOf(e) === groupOf(entry));
-    if (sameGroup.length > MAX_EXAMPLES_PER_SIZE) {
-      replaced = sameGroup[0];
-      examples = examples.filter(e => e.id !== replaced.id);
-    }
-    if (!persistReferenceExamples(examples)) {
-      showBigToast('No se pudo guardar: almacenamiento lleno. NO se ha borrado nada — libera espacio en Ajustes.', true);
-      renderStorageInfo();
-      return;
-    }
-    const sizeCount = entry.size ? examples.filter(e => e.size === entry.size).length : null;
-    const replNote = replaced ? ` · límite de ${MAX_EXAMPLES_PER_SIZE} alcanzado: se reemplazó el más antiguo` : '';
-    if (entry.size && sizeCount === FEWSHOT_TARGET) {
-      showBigToast(`¡Few-shot activo para ${entry.size}mm! (${FEWSHOT_TARGET} ejemplos)`);
-    } else if (entry.size) {
-      showBigToast(`✓ Ejemplo ${entry.size}mm guardado (${sizeCount}/${FEWSHOT_TARGET})${replNote}`);
-    } else {
-      showBigToast(`✓ Ejemplo guardado (${examples.length} en total)${replNote}`);
-    }
-    vibrateShort();
-    renderExamplesSettings();
-    renderHistoryExamples();
-    renderExampleCounts();
-    updateFewshotNotice();
-    renderStorageInfo();
-    warnIfStorageNearLimit();
+    if (await persistNewExample(entry)) markHistoryExample(lastVisionEntryId, entry.id);
   } catch (err) {
     showBigToast('Error al guardar ejemplo: ' + err.message, true);
   }
 };
+
+/* v9.5: "⭐ Guardar como ejemplo" desde una entrada del Historial, con SU miniatura y
+   el conteo ya corregido que figura en la entrada. */
+window.saveHistoryAsExample = async function(id) {
+  try {
+    const e = loadHistory().find(x => x.id === id); if (!e) return;
+    const sizes = [e.size4 > 0 ? '4' : null, e.size8 > 0 ? '8' : null, e.size12 > 0 ? '12' : null].filter(Boolean);
+    if (sizes.length !== 1) { showBigToast('Solo se pueden guardar como ejemplo análisis de un único tamaño', true); return; }
+    if (e.exampleId && getReferenceExamples().some(x => x.id === e.exampleId)) { showToast('Esta entrada ya es un ejemplo'); return; }
+    const t = await thumbGet(id);
+    if (!t || !t.image) { showBigToast('Esta entrada no conserva la foto (es anterior a v9.5 o se perdió)', true); return; }
+    if (typeof e.aiTotal === 'number' && e.total === e.aiTotal &&
+        !confirm(`El conteo de esta entrada (${e.total}) es el de la IA: NO consta que lo hayas corregido.\n\nUn ejemplo con un conteo equivocado empeora los análisis siguientes (se manda a Claude como referencia).\n\n¿Confirmas que ${e.total} es el número REAL?`)) return;
+    const entry = {
+      id: Date.now() + '_' + Math.random().toString(36).slice(2, 7),
+      date: e.date || (new Date().toLocaleDateString('es-ES') + ' ' + new Date().toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })),
+      image: t.image, mime: t.mime,
+      total: e.total, size4: e.size4 || 0, size8: e.size8 || 0, size12: e.size12 || 0,
+      size: sizes[0], confidence: e.confidence || null, product: (e.product || '').slice(0, 60)
+    };
+    if (typeof e.aiTotal === 'number') entry.aiTotal = e.aiTotal;
+    if (await persistNewExample(entry)) { markHistoryExample(id, entry.id); renderHistory(); }
+  } catch (err) {
+    showBigToast('Error al guardar ejemplo: ' + err.message, true);
+  }
+};
+
+/* Tras pintar el historial: miniatura y botón en las tarjetas que conservan su foto */
+async function hydrateHistoryThumbs() {
+  const slots = [...document.querySelectorAll('.histThumbSlot')]; if (!slots.length) return;
+  const map = await thumbGetMany(slots.map(s => s.dataset.id));
+  const examples = getReferenceExamples();
+  slots.forEach(sl => {
+    const t = map[sl.dataset.id]; if (!t) return;
+    const isEx = sl.dataset.ex && examples.some(x => x.id === sl.dataset.ex);
+    sl.innerHTML = `<img alt="miniatura" src="data:${t.mime};base64,${t.image}" style="width:64px;height:64px;object-fit:cover;border-radius:8px;border:0.5px solid var(--border2);flex-shrink:0">
+      ${isEx ? '<span style="font-size:11px;font-weight:700;color:var(--green)">✓ Ya es un ejemplo guardado</span>'
+             : `<button onclick="saveHistoryAsExample('${sl.dataset.id}')" style="font-size:11px;padding:6px 10px">⭐ Guardar como ejemplo</button>`}`;
+    sl.style.display = 'flex';
+  });
+}
 
 window.deleteExample = function(id) {
   const examples = getReferenceExamples().filter(e => e.id !== id);
@@ -2347,11 +2481,62 @@ function loadHistory(){return JSON.parse(localStorage.getItem('analysisHistory')
    (ej. tras guardar una pesada, o ahora tras borrar entradas
    individualmente) y habría corrompido otra. Ahora se busca por id. */
 function saveHistoryEntry(entry){
+  const thumb=entry._thumb; delete entry._thumb;
   if(!entry.id)entry.id=Date.now().toString(36)+Math.random().toString(36).slice(2,6);
   if(!entry.ts)entry.ts=Date.now();   /* v9.1: para las métricas "desde la línea base" */
   const h=loadHistory();h.unshift(entry);if(h.length>50)h.pop();
   localStorage.setItem('analysisHistory',JSON.stringify(h));updateHistoryBadge();
+  if(thumb) thumbPut(entry.id,thumb);
   return entry.id;
+}
+
+/* ══ MINIATURAS DEL HISTORIAL (v9.5) ══
+   El historial nunca guardó la foto (localStorage ya va justo con ejemplos e
+   historial). Cada análisis de foto única guarda aparte su miniatura (≤400 px,
+   JPEG 0.7: exactamente lo que guardaría un ejemplo) en IndexedDB, que tiene
+   una cuota mucho mayor. Se borran las miniaturas huérfanas cuando su entrada
+   desaparece (borrar, duplicados, tope de 50, "Borrar historial"). */
+const THUMB_DB = 'pellet-photos', THUMB_STORE = 'thumbs';
+function thumbDB(){
+  return new Promise((res,rej)=>{
+    if(!window.indexedDB) return rej(new Error('sin IndexedDB'));
+    const r=indexedDB.open(THUMB_DB,1);
+    r.onupgradeneeded=()=>{ r.result.createObjectStore(THUMB_STORE,{keyPath:'id'}); };
+    r.onsuccess=()=>res(r.result); r.onerror=()=>rej(r.error);
+  });
+}
+async function thumbTx(mode,fn){
+  const db=await thumbDB();
+  try{
+    return await new Promise((res,rej)=>{
+      const tx=db.transaction(THUMB_STORE,mode), st=tx.objectStore(THUMB_STORE); let out;
+      out=fn(st); tx.oncomplete=()=>res(out instanceof IDBRequest?out.result:out); tx.onerror=()=>rej(tx.error); tx.onabort=()=>rej(tx.error);
+    });
+  } finally { db.close(); }
+}
+async function thumbPut(id,t){
+  try{ await thumbTx('readwrite',st=>st.put({id,image:t.base64,mime:t.mime,ts:Date.now()})); return true; }
+  catch(e){ console.log('miniatura no guardada:',e&&e.name); return false; }
+}
+async function thumbGet(id){
+  try{ return await thumbTx('readonly',st=>st.get(id)); }catch(e){ return null; }
+}
+async function thumbGetMany(ids){
+  const out={};
+  try{
+    await thumbTx('readonly',st=>{ ids.forEach(id=>{ const r=st.get(id); r.onsuccess=()=>{ if(r.result) out[id]=r.result; }; }); return null; });
+  }catch(e){}
+  return out;
+}
+let prunePending=null;
+function schedulePruneThumbs(){
+  clearTimeout(prunePending);
+  prunePending=setTimeout(async()=>{
+    try{
+      const valid=new Set(loadHistory().map(e=>e.id));
+      await thumbTx('readwrite',st=>{ const r=st.getAllKeys(); r.onsuccess=()=>{ (r.result||[]).forEach(k=>{ if(!valid.has(k)) st.delete(k); }); }; return null; });
+    }catch(e){ console.log('poda de miniaturas falló:',e&&e.name,e&&e.message); }
+  },800);
 }
 function replaceHistoryEntry(id,entry){
   const h=loadHistory(),idx=h.findIndex(e=>e.id===id); if(idx<0)return false;
@@ -2365,7 +2550,7 @@ function updateLastHistoryTotal(newTotal,size4,size8,size12){
   h[idx].total=newTotal; h[idx].size4=size4; h[idx].size8=size8; h[idx].size12=size12;
   localStorage.setItem('analysisHistory',JSON.stringify(h));
 }
-function updateHistoryBadge(){const h=loadHistory(),b=qs('#historyBadge');if(b)b.textContent=h.length>0?h.length:'';}
+function updateHistoryBadge(){const h=loadHistory(),b=qs('#historyBadge');if(b)b.textContent=h.length>0?h.length:'';schedulePruneThumbs();}
 
 /* Refresca todo lo que depende del historial (listas, contadores del
    topbar, dashboard de entrenamiento) tras borrar entradas. */
@@ -2414,7 +2599,7 @@ window.removeDuplicateHistory=function(){
 let historyFilter='all';
 window.filterHistory=function(type){
   historyFilter=type;
-  qsa('.hist-subtab').forEach(b=>b.classList.toggle('active',b.dataset.histsub===historyFilter));
+  qsa('.hist-subtab[data-histsub]').forEach(b=>b.classList.toggle('active',b.dataset.histsub===historyFilter));
   renderHistory();
 };
 window.renderHistory=function(){
@@ -2506,6 +2691,7 @@ window.renderHistory=function(){
       <div style="font-size:11px;color:var(--muted);margin-bottom:4px">${e.date}</div>
       ${photoBreakdownHtml}
       ${notesShort?`<div style="font-size:11px;color:var(--hint);font-style:italic;margin-bottom:6px">${notesShort}</div>`:''}
+      ${(!isMulti&&!isWeigh&&e.id&&e.aiTotal!==undefined&&sizesUsed.length===1)?`<div class="histThumbSlot" data-id="${e.id}" data-ex="${e.exampleId||''}" style="display:none;align-items:center;gap:10px;margin-bottom:8px"></div>`:''}
       <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;align-items:center">
         ${multiBadge}
         ${methodBadge}
@@ -2519,6 +2705,7 @@ window.renderHistory=function(){
       </div>
     </div>`;
   }).join('');
+  hydrateHistoryThumbs();
 };
 /* v7.9.5: ya no copia formato Odoo, solo un resumen en texto plano,
    ej. "Pellet 8mm · 55 uds · 23/9/2026 18:22 · Confianza alta". */

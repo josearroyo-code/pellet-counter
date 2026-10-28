@@ -183,7 +183,7 @@
     <h1>Pellet Counter <span class="ai-badge">✦ Claude AI</span></h1>
     <div style="display:flex;align-items:center;gap:10px">
       <div id="analyzeSpinner" class="spinner"></div>
-      <span class="ver">v9.4</span>
+      <span class="ver">v9.5</span>
     </div>
   </div>
   <div class="subbar" id="exCounts" style="border-bottom:none;padding-bottom:2px"></div>
@@ -581,8 +581,10 @@
       <div class="card">
         <p class="card-label">Acerca de</p>
         <div style="font-size:12px;color:var(--muted);line-height:2.2">
-          <div><strong style="color:var(--text)">Pellet Counter v9.4</strong></div>
+          <div><strong style="color:var(--text)">Pellet Counter v9.5</strong></div>
           <div>Motor IA · Claude Sonnet Vision</div>
+          <div>Historial · miniatura de cada foto única y "⭐ Guardar como ejemplo" con el conteo ya corregido (desde v9.5; las entradas anteriores no tienen foto)</div>
+          <div>Disparo automático · guía de encuadre, cuenta atrás visible y señal (destello, sonido, vibración) al disparar</div>
           <div>Visor de cámara · disparo automático con enfoque 🟢 (opcional) y fijar exposición/blancos (opcional)</div>
           <div>Visor de cámara · indicador de enfoque en vivo (🟢/🟡/🔴) y nitidez guardada en el historial</div>
           <div>Densidad alta · el aviso ahora también sale en foto única; perfil 4mm contempla pellets de canto</div>
@@ -695,8 +697,21 @@
      (apaisado) o barra inferior (vertical). -->
 <div id="cameraModal" style="display:none;position:fixed;inset:0;background:#000;z-index:9998;align-items:stretch;justify-content:stretch;padding:0">
   <div id="cameraLayout" style="display:flex;gap:0;width:100%;height:100%">
-    <div id="cameraPreviewWrap" style="flex:1 1 auto;min-height:0;min-width:0;background:#000;overflow:hidden;display:flex;align-items:center;justify-content:center">
+    <div id="cameraPreviewWrap" style="position:relative;flex:1 1 auto;min-height:0;min-width:0;background:#000;overflow:hidden;display:flex;align-items:center;justify-content:center">
       <video id="cameraVideo" autoplay playsinline muted style="width:100%;height:100%;object-fit:contain"></video>
+      <!-- v9.5: guía de encuadre (siempre visible, independiente del semáforo), aviso y cuenta atrás del disparo automático, destello -->
+      <div id="cameraGuide" style="position:absolute;display:none;pointer-events:none">
+        <svg viewBox="0 0 100 100" preserveAspectRatio="none" style="width:100%;height:100%;display:block">
+          <rect x="0.5" y="0.5" width="99" height="99" fill="none" stroke="rgba(255,255,255,.75)" stroke-width="2" vector-effect="non-scaling-stroke"/>
+          <rect x="6" y="6" width="88" height="88" fill="none" stroke="rgba(255,255,255,.9)" stroke-width="2" stroke-dasharray="8 6" vector-effect="non-scaling-stroke"/>
+          <path d="M33.33 6V94M66.67 6V94M6 33.33H94M6 66.67H94" stroke="rgba(255,255,255,.28)" stroke-width="1" vector-effect="non-scaling-stroke"/>
+          <path d="M48 50H52M50 48V52" stroke="rgba(255,255,255,.8)" stroke-width="2" vector-effect="non-scaling-stroke"/>
+        </svg>
+        <div style="position:absolute;left:0;right:0;bottom:7%;text-align:center;font-size:11px;color:rgba(255,255,255,.85);text-shadow:0 1px 3px #000">Todos los pellets dentro del recuadro · sin dedos ni sombras en el borde</div>
+      </div>
+      <div id="autoShotBanner" style="position:absolute;top:10px;left:50%;transform:translateX(-50%);display:none;pointer-events:none;background:rgba(0,0,0,.65);color:#fff;font-size:13px;font-weight:700;padding:6px 14px;border-radius:20px;border:1px solid var(--green);white-space:nowrap">⚡ Disparo automático activado — se hará solo con el enfoque en 🟢</div>
+      <div id="autoShotCount" style="position:absolute;inset:0;display:none;align-items:center;justify-content:center;pointer-events:none;font-size:72px;font-weight:800;color:#fff;text-shadow:0 2px 12px #000,0 0 4px #000;line-height:1"></div>
+      <div id="shotFlash" style="position:absolute;inset:0;background:#fff;opacity:0;pointer-events:none"></div>
     </div>
     <div id="cameraRight" style="display:flex;flex-direction:column;gap:10px;padding:12px 16px calc(12px + env(safe-area-inset-bottom,0px));background:#111;box-sizing:border-box">
       <div id="cameraError" class="warn" style="display:none;text-align:center;margin-bottom:0"></div>
@@ -706,6 +721,8 @@
       <!-- v9.4: opciones del visor (se recuerdan) -->
       <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text);cursor:pointer"><input type="checkbox" id="chkAutoShot" onchange="setAutoShot(this.checked)" style="width:20px;height:20px;min-height:0;padding:0;flex-shrink:0"> ⚡ Disparo automático cuando el enfoque esté en 🟢</label>
       <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text);cursor:pointer"><input type="checkbox" id="chkLockExp" onchange="setLockExposure(this.checked)" style="width:20px;height:20px;min-height:0;padding:0;flex-shrink:0"> 🔒 Fijar exposición y balance de blancos</label>
+      <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text);cursor:pointer"><input type="checkbox" id="chkGuide" onchange="setFrameGuide(this.checked)" style="width:20px;height:20px;min-height:0;padding:0;flex-shrink:0"> ▦ Guía de encuadre</label>
+      <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text);cursor:pointer"><input type="checkbox" id="chkSound" onchange="setShotSound(this.checked)" style="width:20px;height:20px;min-height:0;padding:0;flex-shrink:0"> 🔔 Sonido al disparo automático</label>
       <div id="cameraLockInfo" style="font-size:11px;color:var(--hint);text-align:center;min-height:14px"></div>
       <div id="cameraResInfo" style="font-size:12px;color:var(--muted);text-align:center"></div>
       <!-- Solo visible si hay más de una cámara disponible (v8.1 patch) -->
@@ -719,13 +736,13 @@
   <canvas id="cameraCaptureCanvas" style="display:none"></canvas>
 </div>
 
-<!-- splash v9.4 -->
+<!-- splash v9.5 -->
 <div id="splash" style="position:fixed;inset:0;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:9999;transition:opacity 0.4s">
   <div style="font-size:44px;margin-bottom:14px">⬤</div>
   <div style="font-size:20px;font-weight:700;color:var(--text);letter-spacing:-0.5px">Pellet Counter</div>
   <div style="font-size:12px;color:var(--green);font-weight:600;margin-top:6px;display:flex;align-items:center;gap:8px">
     <span>✦ Claude AI</span><span style="color:var(--hint)">·</span>
-    <span style="font-family:monospace;color:var(--blue)">v9.4</span>
+    <span style="font-family:monospace;color:var(--blue)">v9.5</span>
   </div>
   <div style="margin-top:28px;width:60px;height:2px;background:var(--surface2);border-radius:2px;overflow:hidden">
     <div style="height:100%;background:linear-gradient(90deg,var(--blue),var(--green));border-radius:2px;animation:load 1.3s ease-out forwards"></div>
