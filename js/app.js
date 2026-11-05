@@ -1,4 +1,24 @@
 /* ══════════════════════════════════════════
+   Pellet Counter v9.6 — lote de bugs de la auditoría de v9.5 (1, 3, 4, 6, 7)
+   1 MULTIFOTO: una foto que falla (error de API, 429, sin clave) ya no se
+          cuenta como 0 EN SILENCIO: se marca en rojo con "↻ Reintentar", el
+          estado lo cuenta, "Confirmar total" pide confirmación y el lote se
+          guarda con confianza "baja" + nota; una foto con confianza "baja"
+          limita el lote a "media".
+   3 ESCAPADO DE HTML (esc/safeId): notes (las escribe el modelo), fechas,
+          albarán, nombres/iconos de producto, ids, datos de ejemplos e
+          historial importados… ya no se insertan en bruto con innerHTML
+          (podían ejecutar script con acceso a la API key de localStorage).
+   4 HISTORIAL: tope 50 → HISTORY_MAX=500 (el muestreo intensivo lo agotaba y
+          "Estado del entrenamiento" solo veía las 50 últimas). La lista se
+          pagina (60 + "Mostrar más") y se conservan miniaturas de las 200
+          más recientes (THUMB_KEEP).
+   6 "BORRAR HISTORIAL": ahora reinicia lastVisionEntryId/multiSavedId/Sig y
+          refresca contadores, estadísticas y almacenamiento (antes se podía
+          quedar un lote sin poder volver a guardarse).
+   7 "GUARDAR COMO EJEMPLO": ya no duplica; pulsarlo otra vez sobre la misma
+          foto ACTUALIZA el ejemplo (reemplaza, no suma) hasta cargar otra foto.
+   ══════════════════════════════════════════
    Pellet Counter v9.5 — tras el test de 4mm con disparo automático
    (6 muestras: -11, 0, -2, -6, 0, +1; nitidez al disparar 734 vs 711 en vivo,
    ~3% frente al 82% de caída con disparo manual → el temblor está resuelto)
@@ -458,7 +478,7 @@
    Fix: JSON parser robusto
    ══════════════════════════════════════════ */
 
-const VERSION = 'v9.5';
+const VERSION = 'v9.6';
 /* Límite de tokens de la respuesta en conteo (foto única, multifoto y reintento). 300 cortaba el 87% de las respuestas. */
 const COUNT_MAX_TOKENS = 600;
 
@@ -491,6 +511,7 @@ let lastCaptureMethod = null;
 /* v9.3: nitidez (varianza del Laplaciano) de la foto única actual, medida igual para cámara y archivo */
 let lastSharpness = null;
 let lastThumb = null, thumbToken = 0;   /* v9.5: miniatura (≤400 px) de la foto única actual, para el historial */
+let currentPhotoExampleId = null;   /* v9.6: ejemplo ya creado desde la foto actual (pulsar de nuevo lo ACTUALIZA) */
 let lastCamMeta = null;   /* v9.4: {lock,exp,ct} de la foto de cámara actual */
 /* v8.2: id de la entrada del historial que el ajuste ±1 puede modificar
    (null mientras haya un aviso de tamaño sin resolver: esa entrada aún
@@ -529,6 +550,10 @@ let wakeLock    = null;
 
 const qs  = s => document.querySelector(s);
 const qsa = s => document.querySelectorAll(s);
+/* v9.6: escapado para insertar texto en innerHTML (contenido) y en atributos entre comillas. */
+function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+/* Ids que acaban dentro de onclick="f('…')" o data-*: solo [A-Za-z0-9_-] (los ids propios ya cumplen esto). */
+function safeId(s){ return String(s==null?'':s).replace(/[^\w-]/g,''); }
 
 const PELLET_PROFILES = {
   '4': "Electrodos de disco sinterizado de 4mm de diámetro, de aplicación médica — NO son condensadores cerámicos, resistencias ni ningún otro componente electrónico, aunque el disco pequeño con un hilo metálico pueda recordar a uno. Son los discos MÁS PEQUEÑOS de la imagen — significativamente más pequeños que los de 8mm y 12mm. Color rosado o marrón claro cuando son nuevos, se vuelven gris oscuro o marrón oscuro con la exposición a la luz — ambos colores son el mismo producto. Pesan aproximadamente 0.08g cada uno. Tienen un hilo fino metálico saliendo del centro, muy difícil de ver a esta escala. INSTRUCCIONES CRÍTICAS: son extremadamente pequeños y tienden a agruparse. Si ves una zona con varios puntos oscuros juntos, asume que son múltiples discos individuales y cuenta cada punto circular por separado. Cuenta cada disco individualmente aunque se toquen o solapen. Ignora los hilos metálicos sueltos — son líneas finas, no discos (salvo el hilo de un pellet de canto, ver la nota siguiente). Algunos pellets pueden estar de canto o inclinados, mostrando principalmente el hilo metálico y solo el borde del disco. Cuenta estos casos igual que los que están planos — no los ignores ni los confundas con restos de hilo suelto. Si un pellet de canto o ambiguo aparece dentro de una zona densa, decide únicamente sobre ESE pellet: no apliques un conteo conservador ni restes unidades al resto de la zona. ATENCIÓN AL SOBRECONTEO: estos pellets son muy pequeños y tienden a aparecer más de lo que realmente son. Si dudas entre N y N+1 sobre un pellet CONCRETO, elige el menor solo para ese pellet. Esa cautela es individual: NO la extiendas a los demás pellets de la zona — cuenta cada disco plano y claramente visible de la zona de forma normal, uno a uno, aunque haya un pellet ambiguo a su lado.",
@@ -673,8 +698,8 @@ window.renderProductSelector = function() {
   const el=qs('#productSelector'); if(!el) return;
   const active=localStorage.getItem('activeProduct')||'pellets';
   el.innerHTML=Object.entries(getProducts()).map(([id,p])=>
-    `<button onclick="selectProduct('${id}')" style="flex:1;min-width:70px;justify-content:center;flex-direction:column;gap:2px;padding:8px 4px;font-size:11px;${id===active?'background:var(--blue-dim);border-color:var(--blue);color:var(--blue)':''}">
-      <span style="font-size:15px">${p.icon}</span><span>${p.name}</span></button>`
+    `<button onclick="selectProduct('${safeId(id)}')" style="flex:1;min-width:70px;justify-content:center;flex-direction:column;gap:2px;padding:8px 4px;font-size:11px;${id===active?'background:var(--blue-dim);border-color:var(--blue);color:var(--blue)':''}">
+      <span style="font-size:15px">${esc(p.icon)}</span><span>${esc(p.name)}</span></button>`
   ).join('')+
   `<button onclick="showAddProduct()" style="flex:1;min-width:55px;justify-content:center;flex-direction:column;gap:2px;padding:8px 4px;font-size:11px;">
     <span style="font-size:15px">➕</span><span>Nuevo</span></button>`;
@@ -782,15 +807,16 @@ function renderMultiList() {
         <div style="display:flex;align-items:center;gap:6px">
           ${f.result?`
             <button onclick="adjustMultiFotoCount(${i},-1)" style="width:24px;height:24px;padding:0;font-size:13px;border-radius:6px;justify-content:center;flex-shrink:0">−</button>
-            <input type="number" value="${f.result.total}" onchange="setMultiFotoCount(${i},this.value)" style="width:56px;min-height:24px;text-align:center;padding:4px 2px;font-size:14px;font-weight:700;flex-shrink:0">
+            <input type="number" value="${esc(f.result.total)}" onchange="setMultiFotoCount(${i},this.value)" style="width:56px;min-height:24px;text-align:center;padding:4px 2px;font-size:14px;font-weight:700;flex-shrink:0">
             <button onclick="adjustMultiFotoCount(${i},1)" style="width:24px;height:24px;padding:0;font-size:13px;border-radius:6px;justify-content:center;flex-shrink:0">＋</button>
             <span style="font-size:11px;color:var(--muted)">uds</span>
           `:`<span style="font-size:14px;font-weight:700;color:var(--muted)">${f.analyzing?'⏳ Analizando…':'⏸ En cola'}</span>`}
         </div>
-        <div style="font-size:11px;color:var(--hint);margin-top:2px">Foto ${i+1}${f.result?' · Confianza '+f.result.confidence:''}</div>
-        ${(()=>{const o=multiPhotoOverLimit(f.result);return o?`<div style="font-size:11px;color:var(--orange);font-weight:700">⚠️ Densidad alta: ${f.result.aiTotal??f.result.total} uds (recomendado ≤${o.lim} para ${o.size}mm) — el conteo pierde precisión; mejor repartir en más fotos</div>`:'';})()}
-        ${f.result?.sizeWarn?`<div style="font-size:11px;color:var(--red);font-weight:700">⚠️ Parece ${f.result.sizeWarn}, no ${f.result.sizeDeclared}mm</div>`:''}
-        ${f.result?.notes?`<div style="font-size:10px;color:var(--hint);font-style:italic">${f.result.notes}</div>`:''}
+        <div style="font-size:11px;color:var(--hint);margin-top:2px">Foto ${i+1}${f.result?' · Confianza '+esc(f.result.confidence):''}</div>
+        ${f.result?.failed?`<div style="font-size:11px;color:var(--red);font-weight:700;display:flex;align-items:center;gap:8px;flex-wrap:wrap">⚠️ Falló: ${esc(f.result.error||f.result.notes)} — cuenta como 0 <button onclick="retryMultiFoto(${i})" style="font-size:11px;padding:3px 8px">↻ Reintentar</button></div>`:''}
+        ${(()=>{const o=multiPhotoOverLimit(f.result);return o?`<div style="font-size:11px;color:var(--orange);font-weight:700">⚠️ Densidad alta: ${esc(f.result.aiTotal??f.result.total)} uds (recomendado ≤${o.lim} para ${esc(o.size)}mm) — el conteo pierde precisión; mejor repartir en más fotos</div>`:'';})()}
+        ${f.result?.sizeWarn?`<div style="font-size:11px;color:var(--red);font-weight:700">⚠️ Parece ${esc(f.result.sizeWarn)}, no ${esc(f.result.sizeDeclared)}mm</div>`:''}
+        ${(f.result?.notes&&!f.result?.failed)?`<div style="font-size:10px;color:var(--hint);font-style:italic">${esc(f.result.notes)}</div>`:''}
       </div>
       <button onclick="removeMultiFoto(${i})" style="padding:4px 8px;font-size:11px;color:var(--orange);border-color:var(--orange);flex-shrink:0">✕</button>
     </div>`;
@@ -801,9 +827,17 @@ function confBorderColor(confidence){
 }
 
 /* Ajuste ±1 por foto individual (antes de confirmar el total) */
+/* Una foto fallida a la que el operario pone un conteo a mano deja de ser un "fallo" (v9.6). */
+function clearFailedIfManual(f){
+  if(f.result.failed&&f.result.total>0){ f.result.failed=false; f.result.notes=(f.result.notes?f.result.notes+' · ':'')+'conteo manual'; }
+}
+window.retryMultiFoto=function(i){
+  const f=multifotos[i]; if(!f||f.analyzing)return;
+  f.result=null; f.analyzing=true; renderMultiList(); updateMultiTotal(); analyzeOneFoto(f);
+};
 window.adjustMultiFotoCount=function(i,delta){
   const f=multifotos[i]; if(!f||!f.result)return;
-  f.result.total=Math.max(0,f.result.total+delta);
+  f.result.total=Math.max(0,f.result.total+delta); clearFailedIfManual(f);
   renderMultiList();
   updateMultiTotal();
 };
@@ -813,7 +847,7 @@ window.adjustMultiFotoCount=function(i,delta){
    no perder el foco del campo al re-renderizar la lista en cada tecla. */
 window.setMultiFotoCount=function(i,value){
   const f=multifotos[i]; if(!f||!f.result)return;
-  f.result.total=Math.max(0,parseInt(value)||0);
+  f.result.total=Math.max(0,parseInt(value)||0); clearFailedIfManual(f);
   renderMultiList();
   updateMultiTotal();
 };
@@ -856,8 +890,9 @@ function updateMultiTotal() {
   const statusEl=qs('#multiStatus');
   if(statusEl){
     statusEl.style.display=multifotos.length>0?'block':'none';
-    statusEl.textContent=pending>0?`⏳ Analizando ${pending} foto${pending>1?'s':''}…`:`✓ ${multifotos.filter(f=>f.result).length} fotos analizadas · Total parcial: ${multiTotal} uds`;
-    statusEl.style.color=pending>0?'#f59e0b':'#3ecf8e';
+    const failedN=multifotos.filter(f=>f.result&&f.result.failed).length;
+    statusEl.textContent=pending>0?`⏳ Analizando ${pending} foto${pending>1?'s':''}…`:`✓ ${multifotos.filter(f=>f.result).length} fotos analizadas · Total parcial: ${multiTotal} uds${failedN?` · ⚠️ ${failedN} con error (cuentan 0)`:''}`;
+    statusEl.style.color=pending>0?'#f59e0b':failedN?'#f97316':'#3ecf8e';
   }
 }
 
@@ -948,7 +983,7 @@ function logAnalysisSend(route,mime,base64,fewShotCount,prompt){
 
 async function analyzeOneFoto(entry) {
   const apiKey=getApiKey();
-  if(!apiKey){entry.analyzing=false;entry.result={total:0,aiTotal:0,confidence:'baja',notes:'Sin API key'};renderMultiList();updateMultiTotal();return;}
+  if(!apiKey){entry.analyzing=false;entry.result={total:0,aiTotal:0,confidence:'baja',notes:'Sin API key',error:'Sin API key',failed:true};renderMultiList();updateMultiTotal();return;}
   /* v7.9.5: verificado — esto ya leía el mismo #productDesc (con el
      perfil 4/8/12mm cargado) que runCountAI(), no un texto genérico;
      el refuerzo en PELLET_PROFILES contra "condensador cerámico" no
@@ -1040,7 +1075,7 @@ async function analyzeOneFoto(entry) {
     const over=multiPhotoOverLimit(entry.result);
     if(over)showToast(`⚠️ Una foto tiene ${total} uds: supera el máximo recomendado (${over.lim}) para ${over.size}mm`,true);
   } catch(err) {
-    entry.result={total:0,aiTotal:0,confidence:'baja',notes:'Error: '+err.message};
+    entry.result={total:0,aiTotal:0,confidence:'baja',notes:'Error: '+err.message,error:err.message,failed:true};
   } finally {
     entry.analyzing=false; renderMultiList(); updateMultiTotal();
   }
@@ -1059,6 +1094,11 @@ window.confirmMultiTotal = function() {
   if (multiConfirmed) return;
   multiConfirmed = true;
   setTimeout(() => { multiConfirmed = false; }, 600);
+  /* v9.6: fotos que fallaron cuentan 0 — el total quedaría incompleto. Se pide confirmación. */
+  const failedN=multifotos.filter(f=>f.result&&f.result.failed).length;
+  if(failedN>0&&!confirm(`${failedN} foto${failedN>1?'s':''} no se ${failedN>1?'pudieron':'pudo'} analizar y cuenta${failedN>1?'n':''} como 0: el total estaría INCOMPLETO.\n\nPuedes pulsar "↻ Reintentar" en esa foto o ponerle el conteo a mano.\n\n¿Confirmar el total igualmente?`)){
+    multiConfirmed=false; return;
+  }
   flushPendingMismatch(); /* si había un aviso de tamaño de foto única sin resolver, no se pierde */
   const singleSize=qs('#singleSize').value;
   /* v7.9.6: confianza "alta" solo si el total confirmado coincide
@@ -1068,7 +1108,8 @@ window.confirmMultiTotal = function() {
      si hubiese corregido una foto única. */
   const rawSum=multifotos.reduce((s,f)=>s+(f.result?.aiTotal??f.result?.total??0),0);
   const wasCorrected=multiTotal!==rawSum;
-  const confidence=wasCorrected?'media':'alta';
+  const anyPhotoLow=multifotos.some(f=>f.result&&!f.result.failed&&f.result.confidence==='baja');
+  const confidence=failedN>0?'baja':(wasCorrected||anyPhotoLow)?'media':'alta';
   counts={c4:singleSize==='4'?multiTotal:0,c8:singleSize==='8'?multiTotal:0,c12:singleSize==='12'?multiTotal:0,total:multiTotal};
   qs('#c4').textContent=singleSize==='4'?multiTotal:'—';
   qs('#c8').textContent=singleSize==='8'?multiTotal:'—';
@@ -1099,11 +1140,11 @@ window.confirmMultiTotal = function() {
     date:new Date().toLocaleDateString('es-ES')+' '+new Date().toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'}),
     total:multiTotal,aiTotal:rawSum,size4:counts.c4,size8:counts.c8,size12:counts.c12,
     product:(qs('#productDesc').value||'').slice(0,60),confidence,
-    notes:null,
+    notes:failedN>0?`⚠️ ${failedN} foto${failedN>1?'s':''} con error: contaron 0 (total incompleto)`:null,
     /* v7.9.8: {ai,total} por foto (no solo el total final) para poder
        mostrar en Historial qué fotos se corrigieron y cuánto, ej.
        "F1: 54→51 (-3)". */
-    photoBreakdown:multifotos.map(f=>({ai:f.result?.aiTotal??f.result?.total??0,total:f.result?.total||0})),
+    photoBreakdown:multifotos.map(f=>{ const b={ai:f.result?.aiTotal??f.result?.total??0,total:f.result?.total||0}; if(f.result?.failed)b.failed=true; return b; }),
     albaran:alb||null
     // ODOO - pendiente de implementar: odoo:buildOdooText()
   };
@@ -1129,6 +1170,7 @@ function processSinglePhotoDataUrl(dataUrl, mime, method) {
   lastImageMime=mime;
   lastCaptureMethod=method||null;
   lastSharpness=null;
+  currentPhotoExampleId=null; { const b=qs('#btnSaveExample'); if(b) b.textContent='✓ Guardar como ejemplo'; }
   if(method!=='camera') lastCamMeta=null;
   lastThumb=null; const myThumb=++thumbToken;
   resizeImageBase64(dataUrl.split(',')[1],mime,EXAMPLE_MAX_DIM).then(t=>{ if(myThumb===thumbToken) lastThumb=t; }).catch(()=>{});
@@ -2010,8 +2052,11 @@ function warnIfStorageNearLimit() {
 /* Guarda un ejemplo nuevo respetando el tope POR TAMAÑO (v8.2): si se supera, se
    reemplaza el más antiguo DEL MISMO tamaño — nunca uno de otro tamaño — y se
    avisa. Devuelve true si se guardó. */
-async function persistNewExample(entry) {
+async function persistNewExample(entry, opts) {
   let examples = getReferenceExamples();
+  /* v9.6: "actualizar" = quitar el ejemplo previo de ESTA misma foto antes de añadir el nuevo */
+  const updating = !!(opts && opts.replaceId && examples.some(e => e.id === opts.replaceId));
+  if (updating) examples = examples.filter(e => e.id !== opts.replaceId);
   examples.push(entry);
   const groupOf = e => e.size || 'other';
   let replaced = null;
@@ -2027,7 +2072,9 @@ async function persistNewExample(entry) {
   }
   const sizeCount = entry.size ? examples.filter(e => e.size === entry.size).length : null;
   const replNote = replaced ? ` · límite de ${MAX_EXAMPLES_PER_SIZE} alcanzado: se reemplazó el más antiguo` : '';
-  if (entry.size && sizeCount === FEWSHOT_TARGET) {
+  if (updating) {
+    showBigToast(`✓ Ejemplo ${entry.size ? entry.size + 'mm ' : ''}actualizado con el conteo actual (${entry.total} uds)`);
+  } else if (entry.size && sizeCount === FEWSHOT_TARGET) {
     showBigToast(`¡Few-shot activo para ${entry.size}mm! (${FEWSHOT_TARGET} ejemplos)`);
   } else if (entry.size) {
     showBigToast(`✓ Ejemplo ${entry.size}mm guardado (${sizeCount}/${FEWSHOT_TARGET})${replNote}`);
@@ -2069,7 +2116,11 @@ window.saveAsExample = async function() {
        comparar después, foto por foto, con la visión clásica (Ajustes → 🧪). */
     const srcEntry = lastVisionEntryId ? loadHistory().find(e => e.id === lastVisionEntryId) : null;
     if (srcEntry && typeof srcEntry.aiTotal === 'number') entry.aiTotal = srcEntry.aiTotal;
-    if (await persistNewExample(entry)) markHistoryExample(lastVisionEntryId, entry.id);
+    if (await persistNewExample(entry, { replaceId: currentPhotoExampleId })) {
+      currentPhotoExampleId = entry.id;
+      markHistoryExample(lastVisionEntryId, entry.id);
+      const b = qs('#btnSaveExample'); if (b) b.textContent = '✓ Guardado como ejemplo (pulsa para actualizar el conteo)';
+    }
   } catch (err) {
     showBigToast('Error al guardar ejemplo: ' + err.message, true);
   }
@@ -2109,9 +2160,9 @@ async function hydrateHistoryThumbs() {
   slots.forEach(sl => {
     const t = map[sl.dataset.id]; if (!t) return;
     const isEx = sl.dataset.ex && examples.some(x => x.id === sl.dataset.ex);
-    sl.innerHTML = `<img alt="miniatura" src="data:${t.mime};base64,${t.image}" style="width:64px;height:64px;object-fit:cover;border-radius:8px;border:0.5px solid var(--border2);flex-shrink:0">
+    sl.innerHTML = `<img alt="miniatura" src="data:${esc(t.mime)};base64,${esc(t.image)}" style="width:64px;height:64px;object-fit:cover;border-radius:8px;border:0.5px solid var(--border2);flex-shrink:0">
       ${isEx ? '<span style="font-size:11px;font-weight:700;color:var(--green)">✓ Ya es un ejemplo guardado</span>'
-             : `<button onclick="saveHistoryAsExample('${sl.dataset.id}')" style="font-size:11px;padding:6px 10px">⭐ Guardar como ejemplo</button>`}`;
+             : `<button onclick="saveHistoryAsExample('${safeId(sl.dataset.id)}')" style="font-size:11px;padding:6px 10px">⭐ Guardar como ejemplo</button>`}`;
     sl.style.display = 'flex';
   });
 }
@@ -2165,10 +2216,10 @@ function buildExamplesGroupsHTML() {
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         ${groups[k].map(e => `
           <div style="position:relative;width:72px">
-            <img src="data:${e.mime};base64,${e.image}" style="width:72px;height:72px;object-fit:cover;border-radius:8px;border:2px solid ${confBorderColor(e.confidence)};display:block">
-            <div style="font-size:10px;text-align:center;color:var(--muted);margin-top:2px">${e.total} uds</div>
-            <div style="font-size:9px;text-align:center;color:var(--hint)">${e.date}</div>
-            <button onclick="deleteExample('${e.id}')" style="position:absolute;top:-6px;right:-6px;width:20px;height:20px;padding:0;border-radius:50%;font-size:10px;line-height:1;background:var(--orange-dim);border-color:var(--orange);color:var(--orange);display:flex;align-items:center;justify-content:center">✕</button>
+            <img src="data:${esc(e.mime)};base64,${esc(e.image)}" style="width:72px;height:72px;object-fit:cover;border-radius:8px;border:2px solid ${confBorderColor(e.confidence)};display:block">
+            <div style="font-size:10px;text-align:center;color:var(--muted);margin-top:2px">${esc(e.total)} uds</div>
+            <div style="font-size:9px;text-align:center;color:var(--hint)">${esc(e.date)}</div>
+            <button onclick="deleteExample('${safeId(e.id)}')" style="position:absolute;top:-6px;right:-6px;width:20px;height:20px;padding:0;border-radius:50%;font-size:10px;line-height:1;background:var(--orange-dim);border-color:var(--orange);color:var(--orange);display:flex;align-items:center;justify-content:center">✕</button>
           </div>`).join('')}
       </div>
     </div>`;
@@ -2475,6 +2526,9 @@ window.importAllData = function(e){
 };
 
 /* ══ HISTORIAL ══ */
+/* v9.6: tope del historial 50 → 500 (≈0.2 MB en localStorage: las fotos van aparte, en IndexedDB). */
+const HISTORY_MAX = 500, HISTORY_PAGE = 60, THUMB_KEEP = 200;
+let historyShown = HISTORY_PAGE;
 function loadHistory(){return JSON.parse(localStorage.getItem('analysisHistory')||'[]');}
 /* v8.2: cada entrada lleva un `id`. Antes el ajuste ±1 posterior a un
    análisis modificaba SIEMPRE h[0] — que podía no ser ya esa entrada
@@ -2484,7 +2538,7 @@ function saveHistoryEntry(entry){
   const thumb=entry._thumb; delete entry._thumb;
   if(!entry.id)entry.id=Date.now().toString(36)+Math.random().toString(36).slice(2,6);
   if(!entry.ts)entry.ts=Date.now();   /* v9.1: para las métricas "desde la línea base" */
-  const h=loadHistory();h.unshift(entry);if(h.length>50)h.pop();
+  const h=loadHistory();h.unshift(entry);if(h.length>HISTORY_MAX)h.length=HISTORY_MAX;
   localStorage.setItem('analysisHistory',JSON.stringify(h));updateHistoryBadge();
   if(thumb) thumbPut(entry.id,thumb);
   return entry.id;
@@ -2533,7 +2587,7 @@ function schedulePruneThumbs(){
   clearTimeout(prunePending);
   prunePending=setTimeout(async()=>{
     try{
-      const valid=new Set(loadHistory().map(e=>e.id));
+      const valid=new Set(loadHistory().slice(0,THUMB_KEEP).map(e=>e.id));   /* miniaturas solo de las THUMB_KEEP más recientes */
       await thumbTx('readwrite',st=>{ const r=st.getAllKeys(); r.onsuccess=()=>{ (r.result||[]).forEach(k=>{ if(!valid.has(k)) st.delete(k); }); }; return null; });
     }catch(e){ console.log('poda de miniaturas falló:',e&&e.name,e&&e.message); }
   },800);
@@ -2598,7 +2652,7 @@ window.removeDuplicateHistory=function(){
    "Todos" explícito). */
 let historyFilter='all';
 window.filterHistory=function(type){
-  historyFilter=type;
+  historyFilter=type; historyShown=HISTORY_PAGE;
   qsa('.hist-subtab[data-histsub]').forEach(b=>b.classList.toggle('active',b.dataset.histsub===historyFilter));
   renderHistory();
 };
@@ -2606,11 +2660,15 @@ window.renderHistory=function(){
   const el=qs('#historyList');if(!el)return;
   /* _i conserva el índice REAL en analysisHistory (para copyHistEntry),
      distinto de la posición dentro de la lista ya filtrada por sub-tab. */
-  let h=loadHistory().map((e,i)=>({...e,_i:i}));
+  /* v9.6: los campos numéricos se fuerzan a número y el resto de textos se escapan al insertarlos
+     (el historial puede traer datos importados o texto escrito por el modelo). */
+  const num=v=>(v===undefined||v===null)?v:(Number.isFinite(Number(v))?Number(v):0);
+  let h=loadHistory().map((e,i)=>({...e,_i:i,total:num(e.total),aiTotal:num(e.aiTotal),calcTotal:num(e.calcTotal),size4:num(e.size4),size8:num(e.size8),size12:num(e.size12),netWeight:num(e.netWeight),unitWeight:num(e.unitWeight),sharpness:num(e.sharpness),
+    photoBreakdown:Array.isArray(e.photoBreakdown)?e.photoBreakdown.map(p=>(p&&typeof p==='object')?{ai:num(p.ai),total:num(p.total),failed:!!p.failed}:num(p)):e.photoBreakdown}));
   const visionCount=h.filter(e=>e.method!=='weigh').length;
   const weighCount=h.filter(e=>e.method==='weigh').length;
   const hc=qs('#histCounts');
-  if(hc)hc.textContent=`📷 ${visionCount} análisis · ⚖️ ${weighCount} pesadas`;
+  if(hc)hc.textContent=`📷 ${visionCount} análisis · ⚖️ ${weighCount} pesadas`+(h.length>=HISTORY_MAX*0.8?` · ⚠️ historial al ${Math.round(100*h.length/HISTORY_MAX)}% (${h.length}/${HISTORY_MAX}): exporta una copia antes de que empiece a descartar los más antiguos`:'');
   if(historyFilter==='vision')h=h.filter(e=>e.method!=='weigh');
   else if(historyFilter==='weigh')h=h.filter(e=>e.method==='weigh');
   if(h.length===0){el.innerHTML='<p style="color:var(--muted);font-size:13px;text-align:center;padding:24px">Sin análisis aún</p>';return;}
@@ -2623,8 +2681,10 @@ window.renderHistory=function(){
   };
   /* Tamaño: fondo sólido + texto blanco, distinto de los colores de confianza */
   const sizeBg={4:'var(--blue-dim)',8:'var(--green-dim)',12:'var(--orange-dim)'};
+  const totalEntries=h.length;
+  h=h.slice(0,historyShown);
   el.innerHTML=h.map((e)=>{
-    const notesShort=e.notes?(e.notes.length>80?e.notes.slice(0,80)+'...':e.notes):'';
+    const notesShort=e.notes?(String(e.notes).length>80?String(e.notes).slice(0,80)+'...':String(e.notes)):'';
     const sizesUsed=[e.size4>0?4:null,e.size8>0?8:null,e.size12>0?12:null].filter(Boolean);
     const sizeBadge=sizesUsed.length===1
       ?`<span style="font-size:11px;font-weight:700;color:#fff;background:${sizeBg[sizesUsed[0]]};padding:2px 9px;border-radius:10px">● ${sizesUsed[0]}mm</span>`
@@ -2670,13 +2730,14 @@ window.renderHistory=function(){
       :'';
     const sharpHtml=(!isMulti&&!isWeigh&&typeof e.sharpness==='number')
       ?`<span title="Nitidez: varianza del Laplaciano a 480 px (más alto = más nítida)" style="font-size:11px;color:var(--hint)">🔍 nitidez ${Math.round(e.sharpness)}</span>`:'';
-    const chip=(text,corrected)=>`<span style="display:inline-block;font-size:12px;font-weight:600;padding:3px 8px;border-radius:8px;background:var(--surface2);border:0.5px solid ${corrected?'var(--orange)':'var(--border2)'};color:${corrected?'var(--orange)':'var(--text)'};margin:0 6px 6px 0">📷 ${text}</span>`;
+    const chip=(text,corrected,failed)=>`<span style="display:inline-block;font-size:12px;font-weight:600;padding:3px 8px;border-radius:8px;background:var(--surface2);border:0.5px solid ${failed?'var(--red)':corrected?'var(--orange)':'var(--border2)'};color:${failed?'var(--red)':corrected?'var(--orange)':'var(--text)'};margin:0 6px 6px 0">📷 ${text}</span>`;
     const photoBreakdownHtml=Array.isArray(e.photoBreakdown)&&e.photoBreakdown.length>0
       ?`<div style="margin-bottom:4px">
           <div style="font-size:11px;color:var(--muted);margin-bottom:4px">Desglose por foto:</div>
           ${e.photoBreakdown.map((p,idx)=>{
             const label=`F${idx+1}`;
             if(typeof p==='number')return chip(`${label}: ${p} uds`,false);   /* entradas de v7.9.6/7: solo el total final */
+            if(p.failed&&p.total===0)return chip(`${label}: ⚠️ error (0)`,false,true);
             if(p.ai===p.total)return chip(`${label}: ${p.total} uds`,false);
             const diff=p.total-p.ai;
             return chip(`${label}: ${p.ai}→${p.total} (${diff>0?'+':''}${diff})`,true);
@@ -2688,25 +2749,26 @@ window.renderHistory=function(){
         ${totalDisplay}
         ${confBadge}
       </div>
-      <div style="font-size:11px;color:var(--muted);margin-bottom:4px">${e.date}</div>
+      <div style="font-size:11px;color:var(--muted);margin-bottom:4px">${esc(e.date)}</div>
       ${photoBreakdownHtml}
-      ${notesShort?`<div style="font-size:11px;color:var(--hint);font-style:italic;margin-bottom:6px">${notesShort}</div>`:''}
-      ${(!isMulti&&!isWeigh&&e.id&&e.aiTotal!==undefined&&sizesUsed.length===1)?`<div class="histThumbSlot" data-id="${e.id}" data-ex="${e.exampleId||''}" style="display:none;align-items:center;gap:10px;margin-bottom:8px"></div>`:''}
+      ${notesShort?`<div style="font-size:11px;color:var(--hint);font-style:italic;margin-bottom:6px">${esc(notesShort)}</div>`:''}
+      ${(!isMulti&&!isWeigh&&e.id&&e.aiTotal!==undefined&&sizesUsed.length===1)?`<div class="histThumbSlot" data-id="${esc(safeId(e.id))}" data-ex="${esc(safeId(e.exampleId))}" style="display:none;align-items:center;gap:10px;margin-bottom:8px"></div>`:''}
       <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;align-items:center">
         ${multiBadge}
         ${methodBadge}
         ${sharpHtml}
         ${sizeBadge}
-        ${e.albaran?`<span style="font-size:11px;color:var(--muted)">Albarán:${e.albaran}</span>`:''}
+        ${e.albaran?`<span style="font-size:11px;color:var(--muted)">Albarán:${esc(e.albaran)}</span>`:''}
       </div>
       <div style="display:flex;gap:8px;align-items:center;justify-content:space-between">
         <button onclick="copyHistEntry(${e._i})" style="font-size:11px;padding:5px 10px">📋 Copiar resultado</button>
         <button onclick="deleteHistEntry(${e._i})" title="Borrar esta entrada" aria-label="Borrar esta entrada" style="font-size:11px;padding:5px 10px;color:var(--orange);border-color:var(--orange)">🗑</button>
       </div>
     </div>`;
-  }).join('');
+  }).join('')+(totalEntries>h.length?`<button onclick="showMoreHistory()" style="width:100%;justify-content:center;margin:4px 0 12px;grid-column:1/-1">Mostrar más (${totalEntries-h.length} restantes)</button>`:'');
   hydrateHistoryThumbs();
 };
+window.showMoreHistory=function(){ historyShown+=HISTORY_PAGE; renderHistory(); };
 /* v7.9.5: ya no copia formato Odoo, solo un resumen en texto plano,
    ej. "Pellet 8mm · 55 uds · 23/9/2026 18:22 · Confianza alta". */
 /* Nº de fotos de una entrada de multifoto, o 0 si no lo es. Las entradas
@@ -2731,7 +2793,13 @@ window.copyHistEntry=function(i){
   const h=loadHistory();const e=h[i];if(!e)return;
   navigator.clipboard.writeText(buildResultSummary(e)).then(()=>showToast('Copiado ✓'));
 };
-window.clearHistory=function(){if(!confirm('¿Borrar todo el historial?'))return;localStorage.removeItem('analysisHistory');updateHistoryBadge();renderHistory();renderWeighCounts();};
+window.clearHistory=function(){
+  if(!confirm('¿Borrar todo el historial?'))return;
+  localStorage.removeItem('analysisHistory');
+  /* v9.6: sin esto, tras vaciar el historial "Confirmar total" decía "ya confirmado" y no guardaba, y un ±1 apuntaba a una entrada inexistente */
+  lastVisionEntryId=null; multiSavedId=null; multiSavedSig=null; historyShown=HISTORY_PAGE;
+  refreshAfterHistoryChange(); updateMultiTotal();
+};
 
 /* ══ FRECUENCIA DE "CONFIANZA NO DISPONIBLE" (v8.4) ══
    Persistente (localStorage) porque el log de depuración vive solo en

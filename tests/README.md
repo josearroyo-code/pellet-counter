@@ -44,6 +44,7 @@ y Workers desde Blob) con un servidor estático mínimo en PowerShell.
 | 08 v9.3 | nitidez, veredicto de enfoque, alerta de densidad en foto única, perfil de 4mm |
 | 09 v9.4 | disparo automático, bloqueo de exposición/blancos (con una pista simulada), metadatos de captura |
 | 10 v9.5 | guía de encuadre, señal del disparo, miniaturas en IndexedDB, "Guardar como ejemplo" desde el historial |
+| 11 v9.6 | auditoría v9.5: fotos fallidas en multifoto (marca, reintento, confianza del lote), escapado de HTML contra inyección (notas del modelo, datos importados), historial de 500 con paginación y miniaturas de las 200 últimas, "Borrar historial" reinicia el estado, "Guardar como ejemplo" no duplica |
 | net-cv-* | módulo experimental de visión clásica: descarga y firma SHA-384, caché manipulada, carga offline, imágenes sintéticas |
 
 ## Qué NO cubren (importante para saber cuánto fiarse)

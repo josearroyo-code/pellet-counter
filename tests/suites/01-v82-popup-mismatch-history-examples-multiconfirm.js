@@ -108,7 +108,8 @@ window.addEventListener('load', async () => {
     localStorage.setItem('referenceExamples', JSON.stringify(Array.from({ length: 10 }, (_, i) => ({ id: 't12_' + i, size: '12', total: 30, image: png, mime: 'image/png', date: 'd' }))));
     lastImageBase64 = png; lastImageMime = 'image/png'; counts = { c4: 0, c8: 0, c12: 0, total: 5 };
     loadProfile('4');
-    for (let i = 0; i < 11; i++) await saveAsExample();
+    /* v9.6: pulsar de nuevo sobre la MISMA foto actualiza el ejemplo; aquí cada vuelta simula una foto nueva */
+    for (let i = 0; i < 11; i++) { currentPhotoExampleId = null; await saveAsExample(); }
     const ex = getReferenceExamples();
     ok('12mm intactos (10) tras guardar 11 de 4mm', ex.filter(e => e.size === '12').length === 10, ex.map(e => e.size).join(','));
     ok('4mm topado a 10', ex.filter(e => e.size === '4').length === 10);
@@ -116,7 +117,7 @@ window.addEventListener('load', async () => {
     const total0 = getReferenceExamples().length;
     const origSet = Storage.prototype.setItem;
     Storage.prototype.setItem = function (k, v) { if (k === 'referenceExamples') throw new DOMException('quota', 'QuotaExceededError'); return origSet.call(this, k, v); };
-    await saveAsExample();
+    currentPhotoExampleId = null; await saveAsExample();
     Storage.prototype.setItem = origSet;
     ok('cuota llena: no se borra nada', getReferenceExamples().length === total0);
     ok('cuota llena: avisa', $('bigToast').textContent.includes('NO se ha borrado nada'), $('bigToast').textContent);

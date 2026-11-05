@@ -41,6 +41,7 @@
     ...HOUGH_PCT.map(p => ({ key: 'h' + p, label: 'Hough ' + p + '%' }))
   ];
   const $ = id => document.getElementById(id);
+  const esc = window.esc || (s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])));
 
   /* ───────────── Worker (se serializa con toString y se concatena a OpenCV.js) ───────────── */
   function cvWorkerMain() {
@@ -377,7 +378,7 @@
     /* tarjetas por ejemplo */
     html += '<div style="font-size:12px;font-weight:700;margin:6px 0">Revisión visual (amarillo = contornos de blobs · verde = círculos de Hough 45%)</div><div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px">';
     rows.forEach((x, i) => {
-      if (x.error) { html += `<div style="background:var(--surface2);border-radius:8px;padding:6px;font-size:11px"><b>${x.size}mm</b> · real ${x.truth}<br><span style="color:var(--red)">✗ ${x.error}</span></div>`; return; }
+      if (x.error) { html += `<div style="background:var(--surface2);border-radius:8px;padding:6px;font-size:11px"><b>${x.size}mm</b> · real ${x.truth}<br><span style="color:var(--red)">✗ ${esc(x.error)}</span></div>`; return; }
       const c = x.r.counts, lowRes = x.r.rEst < 5;
       html += `<div style="background:var(--surface2);border-radius:8px;padding:6px;font-size:11px;line-height:1.5">
         <canvas id="cvThumb${i}" style="width:100%;border-radius:6px;background:#000"></canvas>
@@ -418,7 +419,7 @@
         <div id="cvPhotoDiff" style="font-size:12px;margin-top:4px"></div>`;
       drawOverlay($('cvPhotoCanvas'), r);
       window._cvPhotoCounts = c;
-    } catch (err) { box.innerHTML = `<div style="color:var(--red);font-size:12px">✗ ${err.message}</div>`; }
+    } catch (err) { box.innerHTML = `<div style="color:var(--red);font-size:12px">✗ ${esc(err.message)}</div>`; }
     ev.target.value = '';
   };
   window.cvPhotoDiff = function () {
