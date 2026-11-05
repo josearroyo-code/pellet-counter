@@ -1,4 +1,22 @@
 /* ══════════════════════════════════════════
+   Pellet Counter v9.7 — MODO EXPERIMENTAL de modelo (comparación aislada)
+   Para comparar claude-sonnet-4-6 (producción, nivel de resolución ESTÁNDAR:
+   1568 px) con claude-sonnet-5-5 (nivel ALTA resolución: 2576 px) sobre fotos
+   con conteo real verificado. NO cambia producción:
+   - Interruptor en Ajustes (🧪), SOLO EN MEMORIA: se desactiva al cerrar o
+     recargar la app (no hay clave de localStorage que lo guarde).
+   - Banner "🧪 Modelo experimental: Sonnet 5.5 · N análisis" en Contar (y en el
+     visor de cámara) mientras esté activo, y 🧪 en el estado y en el historial.
+   - Cada llamada loguea el modelo ("LLAMADA IA […] modelo=…") y cada análisis
+     ("ANÁLISIS […] modelo=… total=…").
+   - Contador de análisis experimentales (persistente, con reinicio).
+   - Los análisis experimentales se guardan con `model` y quedan FUERA de
+     "Estado del entrenamiento", del contador de confianza y de la comparación
+     con CV (y su aiTotal no se copia a los ejemplos): no contaminan la línea
+     base de producción. La tarjeta de Ajustes los compara por tamaño.
+   - Las respuestas se leen buscando el primer bloque de tipo texto (un modelo
+     nuevo podría anteponer otros bloques). No se envía temperature.
+   ══════════════════════════════════════════
    Pellet Counter v9.6 — lote de bugs de la auditoría de v9.5 (1, 3, 4, 6, 7)
    1 MULTIFOTO: una foto que falla (error de API, 429, sin clave) ya no se
           cuenta como 0 EN SILENCIO: se marca en rojo con "↻ Reintentar", el
@@ -478,9 +496,21 @@
    Fix: JSON parser robusto
    ══════════════════════════════════════════ */
 
-const VERSION = 'v9.6';
+const VERSION = 'v9.7';
 /* Límite de tokens de la respuesta en conteo (foto única, multifoto y reintento). 300 cortaba el 87% de las respuestas. */
 const COUNT_MAX_TOKENS = 600;
+/* v9.7: modelo de producción y modelo experimental (comparación). `experimentalModelOn` vive SOLO en memoria. */
+const PRODUCTION_MODEL = 'claude-sonnet-4-6', EXPERIMENTAL_MODEL = 'claude-sonnet-5-5';
+const PRODUCTION_LABEL = 'Sonnet 4.6', EXPERIMENTAL_LABEL = 'Sonnet 5.5';
+let experimentalModelOn = false;
+function countModel(){ return experimentalModelOn ? EXPERIMENTAL_MODEL : PRODUCTION_MODEL; }
+function modelLabel(m){ return m === EXPERIMENTAL_MODEL ? EXPERIMENTAL_LABEL : m === PRODUCTION_MODEL ? PRODUCTION_LABEL : String(m); }
+/* Primer bloque de texto de la respuesta (compatible con respuestas que antepongan otros bloques). */
+function responseText(data){
+  const b=(data&&Array.isArray(data.content)?data.content:[]).find(x=>x&&typeof x.text==='string');
+  if(!b) throw new Error('La respuesta de la IA no contiene texto (stop_reason='+(data&&data.stop_reason)+')');
+  return b.text.trim().replace(/```json|```/g,'').trim();
+}
 
 /* ══ CAPTURA DE LOGS (v7.9.9) ══
    No hay DevTools a mano en un móvil real — esto guarda los últimos
@@ -977,8 +1007,8 @@ size_match / size_detected: ${o.sizeCheckInstruction}`;
 
 /* Diagnóstico para comparar rutas en Ajustes → 🔍 Ver último log: lo que se
    envía realmente (ruta, tipo y tamaño de imagen, nº de ejemplos, largo del prompt). */
-function logAnalysisSend(route,mime,base64,fewShotCount,prompt){
-  console.log(`ENVÍO IA [${route}]: ${mime}, imagen ${base64.length} car. (~${(base64.length*0.75/1048576).toFixed(2)} MB), few-shot ${fewShotCount}, prompt ${prompt.length} car.`);
+function logAnalysisSend(route,mime,base64,fewShotCount,prompt,model){
+  console.log(`ENVÍO IA [${route}] modelo=${model||PRODUCTION_MODEL}: ${mime}, imagen ${base64.length} car. (~${(base64.length*0.75/1048576).toFixed(2)} MB), few-shot ${fewShotCount}, prompt ${prompt.length} car.`);
 }
 
 async function analyzeOneFoto(entry) {
@@ -993,6 +1023,7 @@ async function analyzeOneFoto(entry) {
      de forma asíncrona), se usa el snapshot congelado por
      addMultiFoto() en window._currentProductDesc, idéntico para
      todas las fotos de un mismo lote. */
+  const model=countModel();   /* v9.7: modelo fijado al empezar esta foto */
   const productDesc=window._currentProductDesc||qs('#productDesc').value.trim()||PELLET_PROFILES['8'];
   const singleSize=qs('#singleSize').value;
   const fewShotCount=getReferenceExamples().filter(e=>e.size===singleSize).slice(-2).length;
@@ -1019,7 +1050,7 @@ async function analyzeOneFoto(entry) {
 
   console.log('MULTIFOTO PROMPT:', prompt.slice(0, 200));
   console.log('MULTIFOTO IMAGE SIZE:', entry.base64.length);
-  logAnalysisSend('multifoto',entry.mime,entry.base64,fewShotCount,prompt);
+  logAnalysisSend('multifoto',entry.mime,entry.base64,fewShotCount,prompt,model);
 
   /* FIX CRÍTICO v7.9.4: mismo reintento con prompt ultra-simple que
      runCountAI ya tenía para foto única — antes analyzeOneFoto solo
@@ -1027,11 +1058,12 @@ async function analyzeOneFoto(entry) {
      sin reintentar con una segunda llamada a la API. */
   let mStop=null;
   async function askClaude(promptText, includeFewShot) {
+    console.log(`LLAMADA IA [multifoto · ${includeFewShot?'1ª llamada':'reintento'}] modelo=${model}${model!==PRODUCTION_MODEL?' 🧪 EXPERIMENTAL':''}`);
     const fewShot=includeFewShot?buildFewShotBlocks(singleSize):[];
     const res=await fetch('https://api.anthropic.com/v1/messages',{
       method:'POST',
       headers:{'Content-Type':'application/json','x-api-key':apiKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
-      body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:COUNT_MAX_TOKENS,messages:[{role:'user',content:[
+      body:JSON.stringify({model:model,max_tokens:COUNT_MAX_TOKENS,messages:[{role:'user',content:[
         ...fewShot,
         {type:'image',source:{type:'base64',media_type:entry.mime,data:entry.base64}},
         {type:'text',text:promptText}
@@ -1040,7 +1072,7 @@ async function analyzeOneFoto(entry) {
     if(!res.ok){const err=await res.json();throw new Error(err.error?.message||`HTTP ${res.status}`);}
     const data=await res.json();
     mStop=data.stop_reason||null;
-    return data.content[0].text.trim().replace(/```json|```/g,'').trim();
+    return responseText(data);
   }
   function extractJson(text){
     if(text.startsWith('{'))return text;
@@ -1070,8 +1102,10 @@ async function analyzeOneFoto(entry) {
     }
     const validConf=['alta','media','baja'].includes(r.confidence);
     if(!validConf)console.log('[multifoto] Respuesta SIN confidence válida (se muestra "media"):',JSON.stringify(r));
-    recordConfidenceOutcome('multi',!validConf,mViaRetry,singleSize,mFirstStop);
-    entry.result={total,aiTotal:total,confidence:validConf?r.confidence:'media',notes:r.notes,sizeWarn,sizeDeclared:singleSize};
+    if(model===PRODUCTION_MODEL) recordConfidenceOutcome('multi',!validConf,mViaRetry,singleSize,mFirstStop);
+    else bumpExpCount();
+    entry.result={total,aiTotal:total,confidence:validConf?r.confidence:'media',notes:r.notes,sizeWarn,sizeDeclared:singleSize,model};
+    console.log(`ANÁLISIS [multifoto] modelo=${model} total=${total} confianza=${validConf?r.confidence:'n/d'} reintento=${mViaRetry?'sí':'no'}`);
     const over=multiPhotoOverLimit(entry.result);
     if(over)showToast(`⚠️ Una foto tiene ${total} uds: supera el máximo recomendado (${over.lim}) para ${over.size}mm`,true);
   } catch(err) {
@@ -1140,6 +1174,7 @@ window.confirmMultiTotal = function() {
     date:new Date().toLocaleDateString('es-ES')+' '+new Date().toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'}),
     total:multiTotal,aiTotal:rawSum,size4:counts.c4,size8:counts.c8,size12:counts.c12,
     product:(qs('#productDesc').value||'').slice(0,60),confidence,
+    model:multifotos.some(f=>f.result&&f.result.model&&f.result.model!==PRODUCTION_MODEL)?EXPERIMENTAL_MODEL:PRODUCTION_MODEL,
     notes:failedN>0?`⚠️ ${failedN} foto${failedN>1?'s':''} con error: contaron 0 (total incompleto)`:null,
     /* v7.9.8: {ai,total} por foto (no solo el total final) para poder
        mostrar en Historial qué fotos se corrigieron y cuánto, ej.
@@ -1605,6 +1640,7 @@ async function runCountAI() {
   if(!lastImageBase64||isAnalyzing)return;
   const apiKey=getApiKey();
   if(!apiKey){showToast('Introduce tu API key en ⚙️ Ajustes',true);switchTab('settings');return;}
+  const model=countModel();   /* v9.7: el modelo se fija al empezar: reintento y resultado usan el mismo aunque se cambie el interruptor a mitad */
   isAnalyzing=true;
   acquireWakeLock();
   flushPendingMismatch(); /* un aviso de tamaño sin resolver NO se pierde: se guarda marcado */
@@ -1635,15 +1671,16 @@ async function runCountAI() {
 
   console.log('SINGLE PROMPT:', prompt.slice(0, 200));
   console.log('SINGLE IMAGE SIZE:', lastImageBase64.length);
-  logAnalysisSend('foto única',lastImageMime,lastImageBase64,fewShotCount,prompt);
+  logAnalysisSend('foto única',lastImageMime,lastImageBase64,fewShotCount,prompt,model);
 
   let lastStopReason=null;
   async function askClaude(promptText, includeFewShot) {
+    console.log(`LLAMADA IA [foto única · ${includeFewShot?'1ª llamada':'reintento'}] modelo=${model}${model!==PRODUCTION_MODEL?' 🧪 EXPERIMENTAL':''}`);
     const fewShot=(includeFewShot&&sizeMode==='single')?buildFewShotBlocks(singleSize):[];
     const res=await fetch('https://api.anthropic.com/v1/messages',{
       method:'POST',
       headers:{'Content-Type':'application/json','x-api-key':apiKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
-      body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:COUNT_MAX_TOKENS,messages:[{role:'user',content:[
+      body:JSON.stringify({model:model,max_tokens:COUNT_MAX_TOKENS,messages:[{role:'user',content:[
         ...fewShot,
         {type:'image',source:{type:'base64',media_type:lastImageMime,data:lastImageBase64}},
         {type:'text',text:promptText}
@@ -1652,7 +1689,7 @@ async function runCountAI() {
     if(!res.ok){const err=await res.json();throw new Error(err.error?.message||`HTTP ${res.status}`);}
     const data=await res.json();
     lastStopReason=data.stop_reason||null;
-    return data.content[0].text.trim().replace(/```json|```/g,'').trim();
+    return responseText(data);
   }
 
   function extractJson(text){
@@ -1710,10 +1747,13 @@ async function runCountAI() {
        se muestra así y se avisa de revisar la foto (no se aparenta "alta"). */
     const confidence=['alta','media','baja'].includes(result.confidence)?result.confidence:null;
     if(!confidence)console.log('Respuesta SIN confidence válida (¿vino del reintento simple?):',JSON.stringify(result));
-    recordConfidenceOutcome('single',!confidence,!!result._viaRetry,sizeMode==='single'?singleSize:'mix',result._firstStop);
+    /* v9.7: los análisis del modelo experimental NO entran en el contador de confianza de producción */
+    if(model===PRODUCTION_MODEL) recordConfidenceOutcome('single',!confidence,!!result._viaRetry,sizeMode==='single'?singleSize:'mix',result._firstStop);
+    else bumpExpCount();
+    console.log(`ANÁLISIS [foto única] modelo=${model} total=${total} confianza=${confidence||'n/d'} reintento=${result._viaRetry?'sí':'no'} método=${lastCaptureMethod||'?'}`);
     const confLabel=confidence||'no disponible';
     const confColor=confidence==='alta'?'#3ecf8e':confidence==='baja'?'#f97316':'#f59e0b';
-    setStatus('statusCount',`✓ ${total} detectados · Confianza: ${confLabel}${result.notes?' · '+result.notes:''}`);
+    setStatus('statusCount',`✓ ${total} detectados · Confianza: ${confLabel}${result.notes?' · '+result.notes:''}${model!==PRODUCTION_MODEL?' · 🧪 '+modelLabel(model):''}`);
     qs('#statusCount').style.color=confColor;
 
     const confWarnEl=qs('#confWarning');
@@ -1757,6 +1797,8 @@ async function runCountAI() {
       confidence,notes:result.notes,albaran:albaranQty||null
       // ODOO - pendiente de implementar: odoo:buildOdooText()
     };
+    historyEntry.model=model;
+    if(result._viaRetry)historyEntry.viaRetry=true;
     if(lastCaptureMethod)historyEntry.captureMethod=lastCaptureMethod;
     if(typeof lastSharpness==='number')historyEntry.sharpness=lastSharpness;
     if(lastCaptureMethod==='camera'&&lastCamMeta)historyEntry.cam=lastCamMeta;
@@ -2115,7 +2157,10 @@ window.saveAsExample = async function() {
     /* v9.0: conteo ORIGINAL de Claude para esta foto (antes de ±1), para poder
        comparar después, foto por foto, con la visión clásica (Ajustes → 🧪). */
     const srcEntry = lastVisionEntryId ? loadHistory().find(e => e.id === lastVisionEntryId) : null;
-    if (srcEntry && typeof srcEntry.aiTotal === 'number') entry.aiTotal = srcEntry.aiTotal;
+    if (srcEntry && typeof srcEntry.aiTotal === 'number') {
+      if (!srcEntry.model || srcEntry.model === PRODUCTION_MODEL) entry.aiTotal = srcEntry.aiTotal;
+      else entry.aiModel = srcEntry.model;   /* v9.7: no mezclar el conteo del modelo experimental con la comparación de producción */
+    }
     if (await persistNewExample(entry, { replaceId: currentPhotoExampleId })) {
       currentPhotoExampleId = entry.id;
       markHistoryExample(lastVisionEntryId, entry.id);
@@ -2145,7 +2190,10 @@ window.saveHistoryAsExample = async function(id) {
       total: e.total, size4: e.size4 || 0, size8: e.size8 || 0, size12: e.size12 || 0,
       size: sizes[0], confidence: e.confidence || null, product: (e.product || '').slice(0, 60)
     };
-    if (typeof e.aiTotal === 'number') entry.aiTotal = e.aiTotal;
+    if (typeof e.aiTotal === 'number') {
+      if (!e.model || e.model === PRODUCTION_MODEL) entry.aiTotal = e.aiTotal;
+      else entry.aiModel = e.model;
+    }
     if (await persistNewExample(entry)) { markHistoryExample(id, entry.id); renderHistory(); }
   } catch (err) {
     showBigToast('Error al guardar ejemplo: ' + err.message, true);
@@ -2728,6 +2776,8 @@ window.renderHistory=function(){
         ?`<span style="font-size:11px;font-weight:700;color:var(--green);border:1px solid var(--green);padding:2px 9px;border-radius:10px">📷 Cámara en vivo</span>`
         :`<span style="font-size:11px;font-weight:700;color:var(--muted);border:1px solid var(--muted);padding:2px 9px;border-radius:10px">📁 Archivo subido</span>`)
       :'';
+    const modelBadge=(e.model&&e.model!==PRODUCTION_MODEL)
+      ?`<span style="font-size:11px;font-weight:700;color:#fff;background:#7c3aed;padding:2px 9px;border-radius:10px" title="Análisis hecho con el modelo EXPERIMENTAL; no cuenta en las métricas de producción">🧪 ${esc(modelLabel(e.model))}</span>`:'';
     const sharpHtml=(!isMulti&&!isWeigh&&typeof e.sharpness==='number')
       ?`<span title="Nitidez: varianza del Laplaciano a 480 px (más alto = más nítida)" style="font-size:11px;color:var(--hint)">🔍 nitidez ${Math.round(e.sharpness)}</span>`:'';
     const chip=(text,corrected,failed)=>`<span style="display:inline-block;font-size:12px;font-weight:600;padding:3px 8px;border-radius:8px;background:var(--surface2);border:0.5px solid ${failed?'var(--red)':corrected?'var(--orange)':'var(--border2)'};color:${failed?'var(--red)':corrected?'var(--orange)':'var(--text)'};margin:0 6px 6px 0">📷 ${text}</span>`;
@@ -2754,6 +2804,7 @@ window.renderHistory=function(){
       ${notesShort?`<div style="font-size:11px;color:var(--hint);font-style:italic;margin-bottom:6px">${esc(notesShort)}</div>`:''}
       ${(!isMulti&&!isWeigh&&e.id&&e.aiTotal!==undefined&&sizesUsed.length===1)?`<div class="histThumbSlot" data-id="${esc(safeId(e.id))}" data-ex="${esc(safeId(e.exampleId))}" style="display:none;align-items:center;gap:10px;margin-bottom:8px"></div>`:''}
       <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;align-items:center">
+        ${modelBadge}
         ${multiBadge}
         ${methodBadge}
         ${sharpHtml}
@@ -2898,6 +2949,7 @@ function statsHistoryEntries(opts){
   const out={'4':[],'8':[],'12':[]}; let excluded=0;
   loadHistory().forEach(e=>{
     if(e.aiTotal===undefined||e.method==='weigh')return;
+    if(!opts.includeExperimental&&e.model&&e.model!==PRODUCTION_MODEL)return;   /* v9.7: análisis del modelo experimental fuera de las métricas de producción */
     const sizesUsed=[e.size4>0?'4':null,e.size8>0?'8':null,e.size12>0?'12':null].filter(Boolean);
     if(sizesUsed.length!==1)return;
     const isMulti=getMultiPhotoCount(e)>0;
@@ -2994,7 +3046,81 @@ window.renderStats = function renderStats() {
   <div style="font-size:10px;color:var(--hint);line-height:1.5;margin-top:6px"><b>Err. medio</b> = error absoluto medio sobre TODOS los análisis (los no corregidos cuentan 0); es la cifra comparable con la visión clásica. <b>Error corr.</b> = media solo de los que corregiste (por eso sale más alto). <b>Prec. exacta</b> = % sin ninguna corrección (±0), un criterio estricto. <b>Tend.</b>: sub = la IA cuenta de menos, sobre = de más. * = menos de 5 muestras: poco fiable. El error de un lote multifoto se suma entre todas sus fotos.</div></div>`;
   el.innerHTML=controls+table+sizes.map(s=>trainingBarHTML(s,stats[s].exampleCount)).join('');
   renderConfStats();
+  renderExpModelCard();
 };
+
+/* ══ MODO EXPERIMENTAL DE MODELO (v9.7) ══ */
+function loadExpStats(){
+  try{ const s=JSON.parse(localStorage.getItem('expModelStats')||'null'); if(s&&typeof s.count==='number')return s; }catch(e){}
+  return {count:0,since:null};
+}
+function bumpExpCount(){
+  const s=loadExpStats(); s.count++; if(!s.since)s.since=new Date().toLocaleDateString('es-ES');
+  try{ localStorage.setItem('expModelStats',JSON.stringify(s)); }catch(e){}
+  renderExpModelBanner(); renderExpModelCard();
+}
+window.resetExpStats=function(){
+  if(!confirm('¿Reiniciar el contador de análisis del modelo experimental? (Los análisis ya hechos siguen en el Historial con su 🧪.)'))return;
+  try{ localStorage.removeItem('expModelStats'); }catch(e){}
+  renderExpModelBanner(); renderExpModelCard();
+};
+function renderExpModelBanner(){
+  const n=loadExpStats().count, on=experimentalModelOn;
+  const b=qs('#expModelBanner');
+  if(b){
+    b.style.display=on?'block':'none';
+    b.textContent=`🧪 Modelo experimental: ${EXPERIMENTAL_LABEL} · ${n} análisis en este modo · NO cuenta para las estadísticas de producción`;
+  }
+  const c=qs('#cameraExpInfo');
+  if(c){ c.style.display=on?'block':'none'; c.textContent=`🧪 Modelo experimental: ${EXPERIMENTAL_LABEL}`; }
+}
+window.toggleExperimentalModel=function(){
+  if(!experimentalModelOn){
+    if(!confirm(`Activar el MODELO EXPERIMENTAL (${EXPERIMENTAL_MODEL}).\n\n• Solo para comparar: producción sigue en ${PRODUCTION_MODEL}.\n• Los análisis se marcan 🧪 y no cuentan en las estadísticas de producción.\n• Puede consumir más tokens de imagen (mayor resolución).\n• Se desactiva solo al cerrar o recargar la app.\n\n¿Activar?`))return;
+    experimentalModelOn=true;
+  } else experimentalModelOn=false;
+  console.log(`MODELO ${experimentalModelOn?'EXPERIMENTAL ACTIVADO':'EXPERIMENTAL DESACTIVADO (producción)'}: se usará ${countModel()}`);
+  renderExpModelBanner(); renderExpModelCard();
+  showToast(experimentalModelOn?`🧪 Modelo experimental activo: ${EXPERIMENTAL_LABEL}`:`Vuelves a producción (${PRODUCTION_LABEL})`);
+};
+/* Análisis de FOTO ÚNICA hechos con el modelo experimental */
+function expEntries(){
+  return loadHistory().filter(e=>e.model===EXPERIMENTAL_MODEL&&e.aiTotal!==undefined&&e.method!=='weigh'&&!(getMultiPhotoCount(e)>0));
+}
+function sizeOfEntry(e){ const s=[e.size4>0?'4':null,e.size8>0?'8':null,e.size12>0?'12':null].filter(Boolean); return s.length===1?s[0]:null; }
+function errSummary(list){   /* error = conteo de la IA − conteo verificado (positivo = cuenta de más) */
+  if(!list.length)return null;
+  const errs=list.map(e=>e.aiTotal-e.total), abs=errs.map(Math.abs);
+  return {n:list.length,mae:abs.reduce((a,b)=>a+b,0)/list.length,bias:errs.reduce((a,b)=>a+b,0)/list.length,w2:abs.filter(x=>x<=2).length};
+}
+window.copyExpResults=function(){
+  const rows=expEntries().map(e=>({fecha:e.date,tamano:sizeOfEntry(e),conteoIA:e.aiTotal,conteoReal:e.total,error:e.aiTotal-e.total,confianza:e.confidence||null,reintento:!!e.viaRetry,modelo:e.model}));
+  navigator.clipboard.writeText(JSON.stringify({modelo:EXPERIMENTAL_MODEL,version:VERSION,analisis:rows},null,1)).then(()=>showToast('Resultados copiados ✓'));
+};
+function renderExpModelCard(){
+  const el=qs('#expModelCard'); if(!el)return;
+  const st=qs('#expModelState'), btn=qs('#btnExpModel'), cnt=qs('#expModelCounter'), res=qs('#expModelResults');
+  const on=experimentalModelOn, stats=loadExpStats();
+  if(st){ st.innerHTML=on
+    ?`<span style="color:#a78bfa;font-weight:700">🧪 EXPERIMENTAL activo</span> · se usa <b>${esc(EXPERIMENTAL_MODEL)}</b>`
+    :`<span style="color:var(--green);font-weight:700">PRODUCCIÓN</span> · se usa <b>${esc(PRODUCTION_MODEL)}</b>`; }
+  if(btn) btn.textContent=on?`⏹ Desactivar y volver a producción (${PRODUCTION_LABEL})`:`🧪 Activar modelo experimental (${EXPERIMENTAL_LABEL})`;
+  if(cnt) cnt.textContent=`Análisis hechos en modo experimental: ${stats.count}${stats.since?` (desde ${stats.since})`:''}`;
+  if(!res)return;
+  const sizes=['4','8','12'], exp=expEntries(), prod=statsHistoryEntries({kind:'single'});
+  if(!exp.length){ res.innerHTML='<div style="font-size:11px;color:var(--hint);line-height:1.5">Aún no hay análisis de foto única con el modelo experimental. Actívalo, analiza fotos con conteo real conocido y corrige el conteo (±1 / editar) para que el error se pueda medir.</div>'; return; }
+  const cell=s=>s?`<b>${Math.round(s.mae*10)/10}</b> (${s.bias>0?'+':''}${Math.round(s.bias*10)/10}) · ${s.w2}/${s.n}${s.n<5?' <span style="color:var(--orange)">*</span>':''}`:'<span style="color:var(--hint)">—</span>';
+  const th='padding:4px 6px;text-align:left;border-bottom:1px solid var(--border2);font-size:11px', td='padding:4px 6px;border-top:0.5px solid var(--border);font-size:11px';
+  const rowFor=(label,color,pick)=>`<tr><td style="${td};color:${color};font-weight:700">${label}</td>${sizes.map(z=>`<td style="${td}">${cell(errSummary(pick(z)))}</td>`).join('')}</tr>`;
+  res.innerHTML=`<div style="font-size:12px;font-weight:700;margin:10px 0 4px">Error por tamaño (IA − real)</div>
+    <div style="font-size:11px;color:var(--hint);margin-bottom:6px">Formato: error absoluto medio (sesgo; + = cuenta de más) · aciertos ±2 / n. * = menos de 5 muestras. Solo fotos únicas; el real es el conteo que dejaste en la entrada.</div>
+    <div style="overflow-x:auto"><table style="border-collapse:collapse;min-width:300px;width:100%"><thead><tr><th style="${th}">Modelo</th>${sizes.map(z=>`<th style="${th}">${z}mm</th>`).join('')}</tr></thead><tbody>
+      ${rowFor('🧪 '+EXPERIMENTAL_LABEL,'#a78bfa',z=>exp.filter(e=>sizeOfEntry(e)===z))}
+      ${rowFor(PRODUCTION_LABEL+' (producción)','var(--blue)',z=>prod[z])}
+    </tbody></table></div>
+    <div style="font-size:11px;color:var(--hint);line-height:1.5;margin-top:6px">La fila de producción usa el periodo elegido en "Estado del entrenamiento" (por defecto, desde la línea base). No son necesariamente las mismas fotos: para comparar foto a foto, analiza con ambos modelos las mismas fotos y mira el Historial (los experimentales llevan 🧪).</div>
+    <button onclick="copyExpResults()" style="width:100%;justify-content:center;margin-top:8px">📋 Copiar resultados experimentales (JSON)</button>`;
+}
 
 /* ══ PWA ══ */
 let deferredPrompt;

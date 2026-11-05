@@ -183,7 +183,7 @@
     <h1>Pellet Counter <span class="ai-badge">✦ Claude AI</span></h1>
     <div style="display:flex;align-items:center;gap:10px">
       <div id="analyzeSpinner" class="spinner"></div>
-      <span class="ver">v9.6</span>
+      <span class="ver">v9.7</span>
     </div>
   </div>
   <div class="subbar" id="exCounts" style="border-bottom:none;padding-bottom:2px"></div>
@@ -200,6 +200,8 @@
 
     <!-- ══ CONTAR ══ -->
     <div class="panel active" id="panel-count">
+    <!-- v9.7: aviso permanente mientras el modelo experimental esté activo -->
+    <div id="expModelBanner" role="status" style="display:none;background:#7c3aed;color:#fff;font-size:13px;font-weight:700;text-align:center;padding:8px 12px;border-radius:var(--radius);margin-bottom:12px"></div>
     <div class="count-layout">
 
       <div class="count-right">
@@ -537,6 +539,15 @@
         <div id="trainingDashboard"></div>
         <div id="confStatsInfo" style="margin-top:14px;padding-top:12px;border-top:0.5px solid var(--border)"></div>
       </div>
+      <div class="card" id="expModelCard">
+        <p class="card-label">🧪 Experimental · modelo de IA (comparación)</p>
+        <p style="font-size:11px;color:var(--hint);margin-bottom:10px;line-height:1.5">Compara el modelo de producción con <strong>claude-sonnet-5-5</strong> (más resolución de imagen) sobre las mismas fotos. <strong>No cambia producción</strong>: el interruptor vive solo en memoria y <strong>se desactiva al cerrar o recargar la app</strong>. Mientras está activo se ve un aviso morado en Contar, cada llamada queda en el log con su modelo, y los análisis se marcan 🧪 y no cuentan en las estadísticas de producción.</p>
+        <div id="expModelState" style="font-size:13px;margin-bottom:8px"></div>
+        <button id="btnExpModel" onclick="toggleExperimentalModel()" style="width:100%;justify-content:center;margin-bottom:8px"></button>
+        <div id="expModelCounter" style="font-size:12px;color:var(--muted)"></div>
+        <button onclick="resetExpStats()" style="font-size:11px;padding:4px 10px;margin-top:6px">↺ Reiniciar contador</button>
+        <div id="expModelResults"></div>
+      </div>
       <div class="card" id="cvCard">
         <p class="card-label">🧪 Experimental · visión clásica (OpenCV.js)</p>
         <p style="font-size:11px;color:var(--hint);margin-bottom:10px;line-height:1.5">Investigación: <strong>no cambia ningún conteo</strong> ni se usa en el flujo normal. Cuenta los pellets sin IA (umbralización + círculos de Hough y área de blobs) y compara con el conteo verificado de tus ejemplos guardados y con el error histórico de Claude, tamaño por tamaño. OpenCV.js (≈10 MB) solo se descarga al pulsar el botón; se verifica su firma SHA-384, se ejecuta en un Worker aislado (sin acceso a tu API key ni al historial) y queda en caché para usarlo sin conexión.</p>
@@ -581,8 +592,9 @@
       <div class="card">
         <p class="card-label">Acerca de</p>
         <div style="font-size:12px;color:var(--muted);line-height:2.2">
-          <div><strong style="color:var(--text)">Pellet Counter v9.6</strong></div>
+          <div><strong style="color:var(--text)">Pellet Counter v9.7</strong></div>
           <div>Motor IA · Claude Sonnet Vision</div>
+          <div>🧪 Modo experimental de modelo (Sonnet 5.5) en Ajustes: aislado de producción, con aviso visible y contador; se desactiva al reabrir</div>
           <div>Historial · hasta 500 entradas (antes 50), lista paginada; "Borrar historial" ahora reinicia todo el estado</div>
           <div>Multifoto · las fotos que fallan se marcan en rojo con "↻ Reintentar" y el lote no se confirma como completo sin avisar</div>
           <div>Seguridad · el texto que escribe la IA o viene de datos importados ya no se inserta como HTML</div>
@@ -727,6 +739,7 @@
       <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text);cursor:pointer"><input type="checkbox" id="chkLockExp" onchange="setLockExposure(this.checked)" style="width:20px;height:20px;min-height:0;padding:0;flex-shrink:0"> 🔒 Fijar exposición y balance de blancos</label>
       <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text);cursor:pointer"><input type="checkbox" id="chkGuide" onchange="setFrameGuide(this.checked)" style="width:20px;height:20px;min-height:0;padding:0;flex-shrink:0"> ▦ Guía de encuadre</label>
       <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text);cursor:pointer"><input type="checkbox" id="chkSound" onchange="setShotSound(this.checked)" style="width:20px;height:20px;min-height:0;padding:0;flex-shrink:0"> 🔔 Sonido al disparo automático</label>
+      <div id="cameraExpInfo" style="display:none;background:#7c3aed;color:#fff;font-size:12px;font-weight:700;text-align:center;padding:6px 8px;border-radius:8px"></div>
       <div id="cameraLockInfo" style="font-size:11px;color:var(--hint);text-align:center;min-height:14px"></div>
       <div id="cameraResInfo" style="font-size:12px;color:var(--muted);text-align:center"></div>
       <!-- Solo visible si hay más de una cámara disponible (v8.1 patch) -->
@@ -740,13 +753,13 @@
   <canvas id="cameraCaptureCanvas" style="display:none"></canvas>
 </div>
 
-<!-- splash v9.6 -->
+<!-- splash v9.7 -->
 <div id="splash" style="position:fixed;inset:0;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:9999;transition:opacity 0.4s">
   <div style="font-size:44px;margin-bottom:14px">⬤</div>
   <div style="font-size:20px;font-weight:700;color:var(--text);letter-spacing:-0.5px">Pellet Counter</div>
   <div style="font-size:12px;color:var(--green);font-weight:600;margin-top:6px;display:flex;align-items:center;gap:8px">
     <span>✦ Claude AI</span><span style="color:var(--hint)">·</span>
-    <span style="font-family:monospace;color:var(--blue)">v9.6</span>
+    <span style="font-family:monospace;color:var(--blue)">v9.7</span>
   </div>
   <div style="margin-top:28px;width:60px;height:2px;background:var(--surface2);border-radius:2px;overflow:hidden">
     <div style="height:100%;background:linear-gradient(90deg,var(--blue),var(--green));border-radius:2px;animation:load 1.3s ease-out forwards"></div>

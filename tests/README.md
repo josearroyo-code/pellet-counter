@@ -27,7 +27,7 @@ actualizar una suite cuando se cambie un comportamiento (ver "Añadir una suite"
 4. Lee el resultado por el protocolo de depuración (CDP) y cuenta las líneas `PASS` / `FAIL` / `EXC`.
 5. Antes de las suites, comprueba que `VERSION` (app.js), `CACHE` (sw.js), topbar, "Acerca de" y splash coinciden.
 
-Las suites con `// @net` se sirven por `http://localhost` (hace falta contexto seguro para `crypto.subtle`, Cache Storage
+Las suites con `// @net` o `// @http` se sirven por `http://localhost` (hace falta contexto seguro para `crypto.subtle`, Cache Storage
 y Workers desde Blob) con un servidor estático mínimo en PowerShell.
 
 ## Suites
@@ -45,6 +45,7 @@ y Workers desde Blob) con un servidor estático mínimo en PowerShell.
 | 09 v9.4 | disparo automático, bloqueo de exposición/blancos (con una pista simulada), metadatos de captura |
 | 10 v9.5 | guía de encuadre, señal del disparo, miniaturas en IndexedDB, "Guardar como ejemplo" desde el historial |
 | 11 v9.6 | auditoría v9.5: fotos fallidas en multifoto (marca, reintento, confianza del lote), escapado de HTML contra inyección (notas del modelo, datos importados), historial de 500 con paginación y miniaturas de las 200 últimas, "Borrar historial" reinicia el estado, "Guardar como ejemplo" no duplica |
+| 12 v9.7 | modo experimental de modelo: arranca siempre en producción (solo en memoria, comprobado con una instancia nueva), indicador y banner, modelo registrado en cada llamada/análisis, contador, exclusión de las métricas de producción y de `aiTotal` en ejemplos, interruptor cambiado a mitad de análisis, bloques de respuesta que no son texto |
 | net-cv-* | módulo experimental de visión clásica: descarga y firma SHA-384, caché manipulada, carga offline, imágenes sintéticas |
 
 ## Qué NO cubren (importante para saber cuánto fiarse)
@@ -61,7 +62,7 @@ y Workers desde Blob) con un servidor estático mínimo en PowerShell.
 ## Añadir una suite
 
 1. Crea `tests/suites/NN-vXY-tema.js` (mismo estilo que las existentes). Cabecera opcional:
-   `// @size 1440,960` (ventana), `// @timeout 150` (segundos máx.), `// @net` (necesita internet/http), `// @aux` (página auxiliar).
+   `// @size 1440,960` (ventana), `// @timeout 150` (segundos máx.), `// @net` (necesita internet; implica http), `// @http` (se sirve por `http://localhost` sin necesitar internet: iframes, Cache Storage…), `// @aux` (página auxiliar).
 2. La suite debe: empezar con `localStorage.clear()`, simular `window.fetch` si llama a la API, acumular líneas
    `PASS …` / `FAIL …` en un array y, al terminar, volcarlas a `<pre id="res">` y poner `document.title = 'RES:done'`.
    Cabecera del `<pre>` opcional: `TOTAL=n PASS=m` (entonces solo hace falta listar las líneas `FAIL`).

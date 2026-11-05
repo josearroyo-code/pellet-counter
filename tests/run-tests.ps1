@@ -30,6 +30,7 @@ foreach ($f in (Get-ChildItem $suiteDir -Filter *.js | Sort-Object Name)) {
     Size = $(if ($head -match '// @size (\d+,\d+)') { $Matches[1] } else { '1280,900' })
     Timeout = $(if ($head -match '// @timeout (\d+)') { [int]$Matches[1] } else { 120 })
     Net = [bool]($head -match '// @net')
+    Http = [bool]($head -match '// @(net|http)')
     Aux = [bool]($head -match '// @aux')
     Desc = $(if ($head -match '(?m)^// (?!SUITE|@)(.+)$') { $Matches[1] } else { '' })
   }
@@ -92,7 +93,7 @@ foreach ($s in $suites) { New-TestPage $s.Name }
 
 # ---------- servidor estatico (solo para suites con red: necesitan contexto seguro http://localhost) ----------
 $serverJob = $null; $httpPort = $BasePort + 90
-if (@($main | Where-Object { $_.Net }).Count -gt 0) {
+if (@($main | Where-Object { $_.Http }).Count -gt 0) {
   $serverJob = Start-Job -ArgumentList $work, $httpPort -ScriptBlock {
     param($dir, $port)
     $l = New-Object System.Net.HttpListener
@@ -129,7 +130,7 @@ function Read-Cdp($wsUrl, $expression) {
 $extract = "(function(){var r=document.getElementById('res');if(r&&r.textContent)return r.textContent;var t=document.title;if(t.indexOf('RES:')===0){try{return decodeURIComponent(t.slice(4))}catch(e){return t}}return t})()"
 
 function Invoke-Suite($s, $port) {
-  $pageUrl = $(if ($s.Net) { "http://localhost:$httpPort/index_$($s.Name).html" } else { 'file:///' + $work.Replace('\', '/') + "/index_$($s.Name).html" })
+  $pageUrl = $(if ($s.Http) { "http://localhost:$httpPort/index_$($s.Name).html" } else { 'file:///' + $work.Replace('\', '/') + "/index_$($s.Name).html" })
   $prof = Join-Path $work "profile_$port"
   $cliArgs = @('--headless=new', '--disable-gpu', '--allow-file-access-from-files', '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream',
             "--user-data-dir=`"$prof`"", "--remote-debugging-port=$port", '--no-first-run', '--disable-sync', '--disable-background-networking', "--window-size=$($s.Size)", $pageUrl)

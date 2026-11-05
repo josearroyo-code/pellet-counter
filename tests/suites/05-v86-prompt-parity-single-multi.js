@@ -61,10 +61,10 @@ window.addEventListener('load', async () => {
     ok('con ejemplos: misma nota few-shot y mismo prompt salvo el aviso', typeof buildCountPrompt !== 'function' ? true : (t2m.replace(MULTI_ONLY_GUARD, '') === t2s && t2s.includes('indicado por texto')));
     R.push('INFO hash single+ejemplos ' + hash(t2s) + ' | multi+ejemplos ' + hash(t2m));
     if (typeof buildCountPrompt === 'function') {
-      ok('log "ENVÍO IA [multifoto]" presente', debugLogs.some(l => l.startsWith('ENVÍO IA [multifoto]: image/png') && l.includes('few-shot ' + Math.min(2, exN))), debugLogs.filter(l => l.startsWith('ENVÍO')));
+      ok('log "ENVÍO IA [multifoto]" presente', debugLogs.some(l => l.startsWith('ENVÍO IA [multifoto] modelo=claude-sonnet-4-6: image/png') && l.includes('few-shot ' + Math.min(2, exN))), debugLogs.filter(l => l.startsWith('ENVÍO')));
       debugLogs.length = 0; lastImageBase64 = null;
       loadCount({ target: { files: [mkFile()] } }); await sleep(500);
-      ok('log "ENVÍO IA [foto única]" presente y misma imagen/few-shot', debugLogs.some(l => /^ENVÍO IA \[foto única\]: image\/png, imagen \d+ car\. \(~[\d.]+ MB\), few-shot 2, prompt \d+ car\./.test(l)), debugLogs.filter(l => l.startsWith('ENVÍO')));
+      ok('log "ENVÍO IA [foto única]" presente y misma imagen/few-shot', debugLogs.some(l => /^ENVÍO IA \[foto única\] modelo=claude-sonnet-4-6: image\/png, imagen \d+ car\. \(~[\d.]+ MB\), few-shot 2, prompt \d+ car\./.test(l)), debugLogs.filter(l => l.startsWith('ENVÍO')));
     }
 
     /* ── Parte 5: contador por tamaño ── */
