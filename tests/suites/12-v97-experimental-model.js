@@ -35,13 +35,13 @@ if (location.search.indexOf('frame=1') >= 0) {
 
     debugLogs.length = 0; queue = [txt(J(41))]; await photo(41);
     ok('producción: la petición usa claude-sonnet-4-6', bodies.length === 1 && bodies[0].model === 'claude-sonnet-4-6', bodies.map(b => b.model));
-    ok('el log registra el modelo de la llamada (sin 🧪)', debugLogs.some(l => l === 'LLAMADA IA [foto única · 1ª llamada] modelo=claude-sonnet-4-6'), debugLogs.filter(l => l.startsWith('LLAMADA')));
+    ok('el log registra el modelo de la llamada (sin 🧪)', debugLogs.some(l => l === 'LLAMADA IA [foto única · 1ª llamada] modelo=claude-sonnet-4-6 temperature=0'), debugLogs.filter(l => l.startsWith('LLAMADA')));
     ok('y el del análisis con su resultado', debugLogs.some(l => /^ANÁLISIS \[foto única\] modelo=claude-sonnet-4-6 total=41 confianza=alta reintento=no/.test(l)), debugLogs.filter(l => l.startsWith('ANÁLISIS')));
     ok('y el de envío de imagen', debugLogs.some(l => l.startsWith('ENVÍO IA [foto única] modelo=claude-sonnet-4-6:')));
     ok('la entrada de historial guarda model de producción', hist()[0].model === 'claude-sonnet-4-6');
     ok('cuenta en el contador de confianza de producción', confStats() && confStats().single.total === 1);
     ok('el contador experimental sigue en 0', expCount() === 0);
-    ok('no se envía temperature', !('temperature' in bodies[0]));
+    ok('producción envía temperature:0 (v9.8)', bodies[0].temperature === 0);
 
     /* ── B. activar / cancelar ── */
     window.confirm = () => false; toggleExperimentalModel();
@@ -61,8 +61,8 @@ if (location.search.indexOf('frame=1') >= 0) {
     bodies = []; debugLogs.length = 0; const confBefore = JSON.stringify(confStats());
     queue = [txt(J(40))]; await photo(40, 'b.png');
     ok('experimental: la petición usa claude-sonnet-5-5', bodies.length === 1 && bodies[0].model === 'claude-sonnet-5-5', bodies.map(b => b.model));
-    ok('sin temperature, mismos parámetros que producción (max_tokens 600)', !('temperature' in bodies[0]) && bodies[0].max_tokens === 600);
-    ok('el log marca la llamada como EXPERIMENTAL con el modelo', debugLogs.some(l => l === 'LLAMADA IA [foto única · 1ª llamada] modelo=claude-sonnet-5-5 🧪 EXPERIMENTAL'), debugLogs.filter(l => l.startsWith('LLAMADA')));
+    ok('el modelo EXPERIMENTAL no recibe temperature (los modelos recientes la rechazan); max_tokens 600', !('temperature' in bodies[0]) && bodies[0].max_tokens === 600);
+    ok('el log marca la llamada como EXPERIMENTAL con el modelo', debugLogs.some(l => l === 'LLAMADA IA [foto única · 1ª llamada] modelo=claude-sonnet-5-5 🧪 EXPERIMENTAL temperature=por defecto'), debugLogs.filter(l => l.startsWith('LLAMADA')));
     ok('log del análisis con el modelo', debugLogs.some(l => /^ANÁLISIS \[foto única\] modelo=claude-sonnet-5-5 total=40/.test(l)));
     ok('la línea de estado del resultado muestra 🧪 Sonnet 5.5', /🧪 Sonnet 5\.5/.test($('statusCount').textContent), $('statusCount').textContent);
     ok('la entrada de historial guarda model experimental', hist()[0].model === 'claude-sonnet-5-5');

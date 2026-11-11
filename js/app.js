@@ -1,4 +1,22 @@
 /* ══════════════════════════════════════════
+   Pellet Counter v9.8 — temperature:0 en producción
+   Medición del usuario: la MISMA foto (real 34), 6 análisis seguidos sin cambio
+   físico → 36, 38, 33, 37, 35, 35 (rango 5, media 35.7). Con `temperature` sin fijar
+   (por defecto 1.0) el modelo muestrea distinto sobre píxeles idénticos.
+   - Las TRES llamadas de conteo (foto única, multifoto, reintento) pasan por
+     postCount() y envían temperature:0 con el modelo de PRODUCCIÓN.
+   - Con anthropic-version 2023-06-01 (la que usa la app) claude-sonnet-4-6 acepta
+     temperature según la documentación oficial. Con la versión de API 2026-10-21 el
+     servidor devuelve 400 si se envía temperature/top_p/top_k: NO se debe subir esa
+     cabecera sin quitar el parámetro. Si algún día el servidor lo rechaza, postCount
+     lo detecta (400 que menciona temperature), lo desactiva para toda la sesión,
+     reintenta esa llamada sin él y lo deja en el log (y en un aviso).
+   - El modelo EXPERIMENTAL (claude-sonnet-5-5) NO recibe temperature: la guía de
+     migración oficial dice que los modelos recientes la rechazan con 400. Por tanto
+     la comparación producción-vs-experimental ya no es "a igualdad de muestreo".
+   - Temperature 0 reduce la variabilidad pero la documentación consultada no
+     garantiza resultados idénticos: se mide repitiendo la misma foto.
+   ══════════════════════════════════════════
    Pellet Counter v9.7 — MODO EXPERIMENTAL de modelo (comparación aislada)
    Para comparar claude-sonnet-4-6 (producción, nivel de resolución ESTÁNDAR:
    1568 px) con claude-sonnet-5-5 (nivel ALTA resolución: 2576 px) sobre fotos
@@ -496,13 +514,42 @@
    Fix: JSON parser robusto
    ══════════════════════════════════════════ */
 
-const VERSION = 'v9.7';
+const VERSION = 'v9.8';
 /* Límite de tokens de la respuesta en conteo (foto única, multifoto y reintento). 300 cortaba el 87% de las respuestas. */
 const COUNT_MAX_TOKENS = 600;
 /* v9.7: modelo de producción y modelo experimental (comparación). `experimentalModelOn` vive SOLO en memoria. */
 const PRODUCTION_MODEL = 'claude-sonnet-4-6', EXPERIMENTAL_MODEL = 'claude-sonnet-5-5';
 const PRODUCTION_LABEL = 'Sonnet 4.6', EXPERIMENTAL_LABEL = 'Sonnet 5.5';
 let experimentalModelOn = false;
+/* v9.8: temperatura de las llamadas de conteo (solo producción; ver cabecera v9.8). */
+const PRODUCTION_TEMPERATURE = 0;
+let temperatureRejected = false;   /* si el servidor rechaza el parámetro, se desactiva en esta sesión */
+function samplingFor(model){ return (model === PRODUCTION_MODEL && !temperatureRejected) ? { temperature: PRODUCTION_TEMPERATURE } : {}; }
+function samplingLabel(model){ const s = samplingFor(model); return 'temperature' in s ? `temperature=${s.temperature}` : 'temperature=por defecto'; }
+/* UNA sola función para las llamadas de conteo (foto única, multifoto y reintentos). */
+async function postCount(apiKey, model, content){
+  const send = () => {
+    const sampling = samplingFor(model);
+    return fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
+      body: JSON.stringify(Object.assign({ model, max_tokens: COUNT_MAX_TOKENS }, sampling, { messages: [{ role: 'user', content }] }))
+    }).then(res => ({ res, sampling }));
+  };
+  let { res, sampling } = await send();
+  if (!res.ok) {
+    let err = null; try { err = await res.json(); } catch (e) { /* cuerpo no JSON */ }
+    const msg = (err && err.error && err.error.message) || '';
+    if (res.status === 400 && 'temperature' in sampling && /temperature|top_p|top_k|sampling/i.test(msg)) {
+      temperatureRejected = true;
+      console.log('⚠️ El servidor rechazó temperature (400): "' + msg + '". Se desactiva en esta sesión y se reintenta esta llamada SIN ella. Revisa la versión de API/modelo.');
+      showToast('⚠️ La API rechazó temperature: se sigue sin ella (ver log)', true);
+      ({ res, sampling } = await send());
+      if (!res.ok) { let e2 = null; try { e2 = await res.json(); } catch (e) { } throw new Error((e2 && e2.error && e2.error.message) || `HTTP ${res.status}`); }
+    } else throw new Error(msg || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
 function countModel(){ return experimentalModelOn ? EXPERIMENTAL_MODEL : PRODUCTION_MODEL; }
 function modelLabel(m){ return m === EXPERIMENTAL_MODEL ? EXPERIMENTAL_LABEL : m === PRODUCTION_MODEL ? PRODUCTION_LABEL : String(m); }
 /* Primer bloque de texto de la respuesta (compatible con respuestas que antepongan otros bloques). */
@@ -1058,19 +1105,13 @@ async function analyzeOneFoto(entry) {
      sin reintentar con una segunda llamada a la API. */
   let mStop=null;
   async function askClaude(promptText, includeFewShot) {
-    console.log(`LLAMADA IA [multifoto · ${includeFewShot?'1ª llamada':'reintento'}] modelo=${model}${model!==PRODUCTION_MODEL?' 🧪 EXPERIMENTAL':''}`);
+    console.log(`LLAMADA IA [multifoto · ${includeFewShot?'1ª llamada':'reintento'}] modelo=${model}${model!==PRODUCTION_MODEL?' 🧪 EXPERIMENTAL':''} ${samplingLabel(model)}`);
     const fewShot=includeFewShot?buildFewShotBlocks(singleSize):[];
-    const res=await fetch('https://api.anthropic.com/v1/messages',{
-      method:'POST',
-      headers:{'Content-Type':'application/json','x-api-key':apiKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
-      body:JSON.stringify({model:model,max_tokens:COUNT_MAX_TOKENS,messages:[{role:'user',content:[
+    const data=await postCount(apiKey,model,[
         ...fewShot,
         {type:'image',source:{type:'base64',media_type:entry.mime,data:entry.base64}},
         {type:'text',text:promptText}
-      ]}]})
-    });
-    if(!res.ok){const err=await res.json();throw new Error(err.error?.message||`HTTP ${res.status}`);}
-    const data=await res.json();
+      ]);
     mStop=data.stop_reason||null;
     return responseText(data);
   }
@@ -1675,19 +1716,13 @@ async function runCountAI() {
 
   let lastStopReason=null;
   async function askClaude(promptText, includeFewShot) {
-    console.log(`LLAMADA IA [foto única · ${includeFewShot?'1ª llamada':'reintento'}] modelo=${model}${model!==PRODUCTION_MODEL?' 🧪 EXPERIMENTAL':''}`);
+    console.log(`LLAMADA IA [foto única · ${includeFewShot?'1ª llamada':'reintento'}] modelo=${model}${model!==PRODUCTION_MODEL?' 🧪 EXPERIMENTAL':''} ${samplingLabel(model)}`);
     const fewShot=(includeFewShot&&sizeMode==='single')?buildFewShotBlocks(singleSize):[];
-    const res=await fetch('https://api.anthropic.com/v1/messages',{
-      method:'POST',
-      headers:{'Content-Type':'application/json','x-api-key':apiKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
-      body:JSON.stringify({model:model,max_tokens:COUNT_MAX_TOKENS,messages:[{role:'user',content:[
+    const data=await postCount(apiKey,model,[
         ...fewShot,
         {type:'image',source:{type:'base64',media_type:lastImageMime,data:lastImageBase64}},
         {type:'text',text:promptText}
-      ]}]})
-    });
-    if(!res.ok){const err=await res.json();throw new Error(err.error?.message||`HTTP ${res.status}`);}
-    const data=await res.json();
+      ]);
     lastStopReason=data.stop_reason||null;
     return responseText(data);
   }
@@ -1798,6 +1833,7 @@ async function runCountAI() {
       // ODOO - pendiente de implementar: odoo:buildOdooText()
     };
     historyEntry.model=model;
+    historyEntry.temp=('temperature' in samplingFor(model))?PRODUCTION_TEMPERATURE:null;   /* v9.8: null = por defecto (anterior a v9.8 o modelo experimental) */
     if(result._viaRetry)historyEntry.viaRetry=true;
     if(lastCaptureMethod)historyEntry.captureMethod=lastCaptureMethod;
     if(typeof lastSharpness==='number')historyEntry.sharpness=lastSharpness;

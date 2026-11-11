@@ -45,6 +45,7 @@ y Workers desde Blob) con un servidor estático mínimo en PowerShell.
 | 09 v9.4 | disparo automático, bloqueo de exposición/blancos (con una pista simulada), metadatos de captura |
 | 10 v9.5 | guía de encuadre, señal del disparo, miniaturas en IndexedDB, "Guardar como ejemplo" desde el historial |
 | 11 v9.6 | auditoría v9.5: fotos fallidas en multifoto (marca, reintento, confianza del lote), escapado de HTML contra inyección (notas del modelo, datos importados), historial de 500 con paginación y miniaturas de las 200 últimas, "Borrar historial" reinicia el estado, "Guardar como ejemplo" no duplica |
+| 13 v9.8 | `temperature:0` en las 3 llamadas de producción (foto única, multifoto, reintento), no en el modelo experimental, anotado en historial y log, degradación segura si el servidor la rechaza (400), errores 400/429/502 sin tocarla |
 | 12 v9.7 | modo experimental de modelo: arranca siempre en producción (solo en memoria, comprobado con una instancia nueva), indicador y banner, modelo registrado en cada llamada/análisis, contador, exclusión de las métricas de producción y de `aiTotal` en ejemplos, interruptor cambiado a mitad de análisis, bloques de respuesta que no son texto |
 | net-cv-* | módulo experimental de visión clásica: descarga y firma SHA-384, caché manipulada, carga offline, imágenes sintéticas |
 
