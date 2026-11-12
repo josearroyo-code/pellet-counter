@@ -33,9 +33,9 @@ window.addEventListener('load', async () => {
     R.push('INFO multi prompt hash ' + hash(multiPrompt));
 
     if (typeof buildCountPrompt === 'function') {
-      ok('multifoto = foto única + SOLO el aviso de condensadores', multiPrompt.replace(MULTI_ONLY_GUARD, '') === singlePrompt);
+      ok('v9.9: multifoto = foto única, carácter a carácter', multiPrompt === singlePrompt, [multiPrompt.length, singlePrompt.length]);
       ok('el prompt de multifoto ya no dice "uno de varios grupos"/"no asumas un rango"', !/varios grupos|no asumas|más o menos de los esperados/.test(multiPrompt));
-      ok('multifoto conserva el aviso "NO condensadores"', multiPrompt.includes('NO condensadores cerámicos'));
+      ok('el bloque IMPORTANTE de 168 caracteres ya no existe en ninguna ruta', typeof MULTI_ONLY_GUARD === 'undefined' && !multiPrompt.includes('IMPORTANTE: Estás contando'));
       ok('foto única NO lleva el bloque IMPORTANTE de multifoto', !singlePrompt.includes('IMPORTANTE: Estás contando'));
     } else {
       R.push('INFO (app antigua: sin buildCountPrompt)');
@@ -58,7 +58,7 @@ window.addEventListener('load', async () => {
     const s2 = JSON.parse(bodies[0]).messages[0].content, m2 = JSON.parse(bodies[1]).messages[0].content;
     ok('few-shot: mismo nº de bloques de contenido en ambas rutas', s2.length === m2.length && s2.length > 2, [s2.length, m2.length, 'ejemplos 8mm=' + exN]);
     const t2s = s2.filter(x => x.type === 'text').pop().text, t2m = m2.filter(x => x.type === 'text').pop().text;
-    ok('con ejemplos: misma nota few-shot y mismo prompt salvo el aviso', typeof buildCountPrompt !== 'function' ? true : (t2m.replace(MULTI_ONLY_GUARD, '') === t2s && t2s.includes('indicado por texto')));
+    ok('con ejemplos: mismo prompt exacto y misma nota few-shot', typeof buildCountPrompt !== 'function' ? true : (t2m === t2s && t2s.includes('indicado por texto')));
     R.push('INFO hash single+ejemplos ' + hash(t2s) + ' | multi+ejemplos ' + hash(t2m));
     if (typeof buildCountPrompt === 'function') {
       ok('log "ENVÍO IA [multifoto]" presente', debugLogs.some(l => l.startsWith('ENVÍO IA [multifoto] modelo=claude-sonnet-4-6: image/png') && l.includes('few-shot ' + Math.min(2, exN))), debugLogs.filter(l => l.startsWith('ENVÍO')));

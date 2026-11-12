@@ -1,4 +1,20 @@
 /* ══════════════════════════════════════════
+   Pellet Counter v9.9 — multifoto y foto única con el MISMO prompt, carácter a carácter
+   1 Se ELIMINA el bloque "IMPORTANTE: Estás contando electrodos de disco de plata
+          sinterizada, NO condensadores cerámicos, NO termistores, NO varistores…"
+          (168 caracteres) que solo llevaba multifoto: el diff real entre ambos prompts
+          era exactamente esa inserción. Es redundante: el perfil ya dice "NO son
+          condensadores cerámicos, resistencias ni ningún otro componente electrónico".
+          Decisión del usuario (el criterio de signo consistente no llegó al umbral,
+          pero se simplifica el pipeline para investigar el efecto de posición).
+          buildCountPrompt ya no tiene variante multi.
+   2 DIAGNÓSTICO: "ENVÍO IA" añade huellas cortas del prompt y de la imagen y los
+          conteos de los ejemplos few-shot usados. Dos análisis con la MISMA huella
+          y distinto resultado = no-determinismo del servidor; huella distinta =
+          algo cambió entre ellos (p. ej. un ejemplo guardado en medio).
+   (Efecto de posición en el lote: revisado — la petición de una foto es idéntica
+   cargada 1ª o 2ª; ver suite 14.)
+   ══════════════════════════════════════════
    Pellet Counter v9.8 — temperature:0 en producción
    Medición del usuario: la MISMA foto (real 34), 6 análisis seguidos sin cambio
    físico → 36, 38, 33, 37, 35, 35 (rango 5, media 35.7). Con `temperature` sin fijar
@@ -514,7 +530,7 @@
    Fix: JSON parser robusto
    ══════════════════════════════════════════ */
 
-const VERSION = 'v9.8';
+const VERSION = 'v9.9';
 /* Límite de tokens de la respuesta en conteo (foto única, multifoto y reintento). 300 cortaba el 87% de las respuestas. */
 const COUNT_MAX_TOKENS = 600;
 /* v9.7: modelo de producción y modelo experimental (comparación). `experimentalModelOn` vive SOLO en memoria. */
@@ -1021,9 +1037,6 @@ window.addMultiFoto = function(e) {
    condensadores…" (v7.9.5, el modelo los confundía en multifoto).
    HIPÓTESIS sin confirmar con la API desde aquí: se valida repitiendo el
    test de 8mm (y comparando la misma foto por foto única vs multifoto). */
-const MULTI_ONLY_GUARD=`IMPORTANTE: Estás contando electrodos de disco de plata sinterizada, NO condensadores cerámicos, NO termistores, NO varistores. Son discos metálicos con un hilo fino.
-
-`;
 function buildFewShotNote(count){
   return count>0
     ?`\nNOTA: antes de la foto a analizar se incluyen ${count} imagen(es) de referencia, cada una con su conteo ya confirmado indicado por texto. Son solo contexto de calibración de escala/densidad — NO las cuentes. La imagen que debes contar es la ÚLTIMA imagen, la que aparece justo antes de este texto.\n`
@@ -1032,7 +1045,7 @@ function buildFewShotNote(count){
 function buildCountPrompt(o){
   return `Eres un sistema experto de conteo industrial de precisión máxima.
 
-${o.multi?MULTI_ONLY_GUARD:''}OBJETO A CONTAR: ${o.productDesc}
+OBJETO A CONTAR: ${o.productDesc}
 
 ${o.sizeInstruction}
 ${o.fewShotNote}
@@ -1054,8 +1067,11 @@ size_match / size_detected: ${o.sizeCheckInstruction}`;
 
 /* Diagnóstico para comparar rutas en Ajustes → 🔍 Ver último log: lo que se
    envía realmente (ruta, tipo y tamaño de imagen, nº de ejemplos, largo del prompt). */
-function logAnalysisSend(route,mime,base64,fewShotCount,prompt,model){
-  console.log(`ENVÍO IA [${route}] modelo=${model||PRODUCTION_MODEL}: ${mime}, imagen ${base64.length} car. (~${(base64.length*0.75/1048576).toFixed(2)} MB), few-shot ${fewShotCount}, prompt ${prompt.length} car.`);
+/* Huella corta (djb2) de un texto: sirve para comprobar en el log que dos análisis recibieron EXACTAMENTE lo mismo. */
+function shortHash(str){ let h=5381; for(let i=0;i<str.length;i++) h=((h*33)^str.charCodeAt(i))>>>0; return h.toString(16).padStart(8,'0'); }
+function logAnalysisSend(route,mime,base64,fewShotCount,prompt,model,size){
+  const ex=size?getReferenceExamples().filter(e=>e.size===size).slice(-2).map(e=>e.total).join(','):'';
+  console.log(`ENVÍO IA [${route}] modelo=${model||PRODUCTION_MODEL}: ${mime}, imagen ${base64.length} car. (~${(base64.length*0.75/1048576).toFixed(2)} MB), few-shot ${fewShotCount}, prompt ${prompt.length} car., huella prompt=${shortHash(prompt)} imagen=${shortHash(base64)} ejemplos=[${ex}]`);
 }
 
 async function analyzeOneFoto(entry) {
@@ -1093,11 +1109,11 @@ async function analyzeOneFoto(entry) {
      solo con los console.log de abajo.) */
   const sizeInstruction=`Todos los objetos son del mismo tamaño (${singleSize}mm). Devuelve small=0, large=0 y pon el total en medium.`;
   const sizeCheckInstruction=`Compara el tamaño visual de los discos con el tamaño declarado (${singleSize}mm). Si no coincide, pon size_match=false e indica en size_detected el tamaño que parecen ("4mm", "8mm" o "12mm"). Solo pon size_match=false si estás razonablemente seguro; ante la duda pon size_match=true y size_detected=null.`;
-  const prompt=buildCountPrompt({productDesc,sizeInstruction,fewShotNote,sizeCheckInstruction,multi:true});
+  const prompt=buildCountPrompt({productDesc,sizeInstruction,fewShotNote,sizeCheckInstruction});
 
   console.log('MULTIFOTO PROMPT:', prompt.slice(0, 200));
   console.log('MULTIFOTO IMAGE SIZE:', entry.base64.length);
-  logAnalysisSend('multifoto',entry.mime,entry.base64,fewShotCount,prompt,model);
+  logAnalysisSend('multifoto',entry.mime,entry.base64,fewShotCount,prompt,model,singleSize);
 
   /* FIX CRÍTICO v7.9.4: mismo reintento con prompt ultra-simple que
      runCountAI ya tenía para foto única — antes analyzeOneFoto solo
@@ -1712,7 +1728,7 @@ async function runCountAI() {
 
   console.log('SINGLE PROMPT:', prompt.slice(0, 200));
   console.log('SINGLE IMAGE SIZE:', lastImageBase64.length);
-  logAnalysisSend('foto única',lastImageMime,lastImageBase64,fewShotCount,prompt,model);
+  logAnalysisSend('foto única',lastImageMime,lastImageBase64,fewShotCount,prompt,model,sizeMode==='single'?singleSize:'');
 
   let lastStopReason=null;
   async function askClaude(promptText, includeFewShot) {

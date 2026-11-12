@@ -1,4 +1,4 @@
-const CACHE = 'pellet-v9.8';
+const CACHE = 'pellet-v9.9';
 const ASSETS = ['./', './index.html', './js/app.js', './js/cv-experimental.js', './manifest.json'];
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS)).then(() => self.skipWaiting()));
