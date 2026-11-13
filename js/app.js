@@ -1,4 +1,20 @@
 /* ══════════════════════════════════════════
+   REFACTOR DEL PIPELINE DE ANÁLISIS (rama fable-audit, sobre v9.9; sin número de
+   versión propio hasta que se fusione)
+   A  analyzeImage(): UNA función para foto única y multifoto (prompt, ejemplos
+      few-shot, llamada, reintento, lectura del JSON, validaciones, contadores y
+      logs). runCountAI() y analyzeOneFoto() conservan solo interfaz e historial.
+      Verificado con tests/suites/15-request-golden.js: las peticiones son
+      idénticas byte a byte a las de v9.9. El reintento sigue teniendo un prompt
+      por ruta (fase C pendiente: unificar al de foto única).
+   B  Bugs: JSON cortado o con texto alrededor → ahora reintenta (antes fallaba);
+      foto única captura la imagen al empezar (si se carga otra foto durante el
+      análisis, el resultado viejo se descarta y se analiza la nueva); límite de
+      tiempo de 90 s por llamada; los conteos se fuerzan a enteros ≥ 0.
+   D  Tabla MODELS (etiqueta y temperature por modelo) y marca `experimental` en
+      cada entrada: las estadísticas ya no dependen de cuál sea el modelo de
+      producción en el momento de mirarlas.
+   ══════════════════════════════════════════
    Pellet Counter v9.9 — multifoto y foto única con el MISMO prompt, carácter a carácter
    1 Se ELIMINA el bloque "IMPORTANTE: Estás contando electrodos de disco de plata
           sinterizada, NO condensadores cerámicos, NO termistores, NO varistores…"
@@ -533,41 +549,70 @@
 const VERSION = 'v9.9';
 /* Límite de tokens de la respuesta en conteo (foto única, multifoto y reintento). 300 cortaba el 87% de las respuestas. */
 const COUNT_MAX_TOKENS = 600;
-/* v9.7: modelo de producción y modelo experimental (comparación). `experimentalModelOn` vive SOLO en memoria. */
+/* Modelos de conteo. Todo lo que depende del modelo vive en esta tabla:
+   - label: nombre visible.
+   - temperature: valor a enviar, o null si el modelo NO admite el parámetro (los modelos
+     recientes lo rechazan con 400; ver cabecera v9.8). Un modelo que no esté en la tabla
+     tampoco recibe temperature.
+   Para cambiar el modelo de producción basta con cambiar PRODUCTION_MODEL: las entradas del
+   historial llevan su propia marca `experimental`, así que no se reclasifican. */
+const MODELS = {
+  'claude-sonnet-4-6': { label: 'Sonnet 4.6', temperature: 0 },
+  'claude-sonnet-5-5': { label: 'Sonnet 5.5', temperature: null }
+};
 const PRODUCTION_MODEL = 'claude-sonnet-4-6', EXPERIMENTAL_MODEL = 'claude-sonnet-5-5';
-const PRODUCTION_LABEL = 'Sonnet 4.6', EXPERIMENTAL_LABEL = 'Sonnet 5.5';
-let experimentalModelOn = false;
-/* v9.8: temperatura de las llamadas de conteo (solo producción; ver cabecera v9.8). */
-const PRODUCTION_TEMPERATURE = 0;
-let temperatureRejected = false;   /* si el servidor rechaza el parámetro, se desactiva en esta sesión */
-function samplingFor(model){ return (model === PRODUCTION_MODEL && !temperatureRejected) ? { temperature: PRODUCTION_TEMPERATURE } : {}; }
+const PRODUCTION_LABEL = MODELS[PRODUCTION_MODEL].label, EXPERIMENTAL_LABEL = MODELS[EXPERIMENTAL_MODEL].label;
+const PRODUCTION_TEMPERATURE = MODELS[PRODUCTION_MODEL].temperature;
+let experimentalModelOn = false;   /* SOLO en memoria: se desactiva al cerrar o recargar */
+let temperatureRejected = false;   /* si el servidor rechaza temperature, se desactiva en esta sesión */
+function samplingFor(model){
+  const t = MODELS[model] ? MODELS[model].temperature : null;
+  return (t !== null && t !== undefined && !temperatureRejected) ? { temperature: t } : {};
+}
 function samplingLabel(model){ const s = samplingFor(model); return 'temperature' in s ? `temperature=${s.temperature}` : 'temperature=por defecto'; }
+/* Modelo con el que EMPIEZA un análisis (se fija al principio: reintento y resultado usan el mismo). */
+function currentModel(){ return experimentalModelOn ? { model: EXPERIMENTAL_MODEL, experimental: true } : { model: PRODUCTION_MODEL, experimental: false }; }
+function countModel(){ return currentModel().model; }
+function modelLabel(m){ return (MODELS[m] && MODELS[m].label) || String(m); }
+/* ¿La entrada del historial salió del modo experimental? Las entradas nuevas llevan `experimental`
+   (true/false). Las de v9.7–v9.9 solo guardaban `model`, y en esas versiones el único modelo
+   experimental fue claude-sonnet-5-5 (literal a propósito: no debe cambiar si cambian las constantes). */
+function isExperimentalEntry(e){ return typeof e.experimental === 'boolean' ? e.experimental : e.model === 'claude-sonnet-5-5'; }
+/* Límite de tiempo de una llamada de conteo (incluye el posible reenvío sin temperature). */
+let countTimeoutMs = 90000;
 /* UNA sola función para las llamadas de conteo (foto única, multifoto y reintentos). */
 async function postCount(apiKey, model, content){
+  const ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+  const timer = ctrl ? setTimeout(() => ctrl.abort(), countTimeoutMs) : null;
   const send = () => {
     const sampling = samplingFor(model);
-    return fetch('https://api.anthropic.com/v1/messages', {
+    const init = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
       body: JSON.stringify(Object.assign({ model, max_tokens: COUNT_MAX_TOKENS }, sampling, { messages: [{ role: 'user', content }] }))
-    }).then(res => ({ res, sampling }));
+    };
+    if (ctrl) init.signal = ctrl.signal;
+    return fetch('https://api.anthropic.com/v1/messages', init).then(res => ({ res, sampling }));
   };
-  let { res, sampling } = await send();
-  if (!res.ok) {
-    let err = null; try { err = await res.json(); } catch (e) { /* cuerpo no JSON */ }
-    const msg = (err && err.error && err.error.message) || '';
-    if (res.status === 400 && 'temperature' in sampling && /temperature|top_p|top_k|sampling/i.test(msg)) {
-      temperatureRejected = true;
-      console.log('⚠️ El servidor rechazó temperature (400): "' + msg + '". Se desactiva en esta sesión y se reintenta esta llamada SIN ella. Revisa la versión de API/modelo.');
-      showToast('⚠️ La API rechazó temperature: se sigue sin ella (ver log)', true);
-      ({ res, sampling } = await send());
-      if (!res.ok) { let e2 = null; try { e2 = await res.json(); } catch (e) { } throw new Error((e2 && e2.error && e2.error.message) || `HTTP ${res.status}`); }
-    } else throw new Error(msg || `HTTP ${res.status}`);
-  }
-  return res.json();
+  const errorMessage = async res => { let e = null; try { e = await res.json(); } catch (x) { /* cuerpo no JSON */ } return (e && e.error && e.error.message) || ''; };
+  try {
+    let { res, sampling } = await send();
+    if (!res.ok) {
+      const msg = await errorMessage(res);
+      if (res.status === 400 && 'temperature' in sampling && /temperature|top_p|top_k|sampling/i.test(msg)) {
+        temperatureRejected = true;
+        console.log('⚠️ El servidor rechazó temperature (400): "' + msg + '". Se desactiva en esta sesión y se reintenta esta llamada SIN ella. Revisa la versión de API/modelo.');
+        showToast('⚠️ La API rechazó temperature: se sigue sin ella (ver log)', true);
+        ({ res, sampling } = await send());
+        if (!res.ok) throw new Error((await errorMessage(res)) || `HTTP ${res.status}`);
+      } else throw new Error(msg || `HTTP ${res.status}`);
+    }
+    return await res.json();
+  } catch (err) {
+    if (ctrl && ctrl.signal.aborted) throw new Error(`La IA no respondió en ${Math.round(countTimeoutMs / 1000)} s (tiempo de espera agotado). Comprueba la conexión y vuelve a intentarlo.`);
+    throw err;
+  } finally { if (timer) clearTimeout(timer); }
 }
-function countModel(){ return experimentalModelOn ? EXPERIMENTAL_MODEL : PRODUCTION_MODEL; }
-function modelLabel(m){ return m === EXPERIMENTAL_MODEL ? EXPERIMENTAL_LABEL : m === PRODUCTION_MODEL ? PRODUCTION_LABEL : String(m); }
 /* Primer bloque de texto de la respuesta (compatible con respuestas que antepongan otros bloques). */
 function responseText(data){
   const b=(data&&Array.isArray(data.content)?data.content:[]).find(x=>x&&typeof x.text==='string');
@@ -1020,23 +1065,12 @@ window.addMultiFoto = function(e) {
   e.target.value='';
 };
 
-/* v8.6: UN solo constructor del prompt de conteo para foto única y multifoto.
-   Antes eran dos textos escritos a mano y distintos; en multifoto el modelo
-   sobrecontaba (4mm: +10/+8 con la misma foto que daba 52/52 en foto única;
-   8mm: +3 y +3 en fotos de 23 y 17). Revisado el código: la IMAGEN viaja
-   igual en ambas rutas (base64 del archivo original, o del JPEG del canvas
-   de la cámara; sin redimensionar — EXAMPLE_MAX_DIM solo afecta a los
-   ejemplos few-shot guardados), y modelo, max_tokens y few-shot también.
-   La única diferencia real era el PROMPT: multifoto añadía "esta foto es
-   uno de varios grupos en los que se ha dividido un bote más grande… no
-   asumas un rango de cantidad… aunque sean más o menos de los esperados"
-   y una nota de few-shot con otra redacción. Ese encuadre puede sesgar
-   hacia contar de más, y el signo cuadra: multifoto sobrecuenta mientras
-   foto única en 8mm tiende a infracontar. Ahora multifoto usa el MISMO
-   texto que foto única; lo único propio de multifoto es el aviso "NO
-   condensadores…" (v7.9.5, el modelo los confundía en multifoto).
-   HIPÓTESIS sin confirmar con la API desde aquí: se valida repitiendo el
-   test de 8mm (y comparando la misma foto por foto única vs multifoto). */
+/* ══ PIPELINE DE ANÁLISIS (compartido por foto única y multifoto) ══
+   Las dos rutas pasan por analyzeImage(): mismo prompt (buildCountPrompt), mismos ejemplos
+   few-shot (selectFewShot), misma llamada (postCount), mismo tratamiento de la respuesta.
+   La ÚNICA diferencia que queda entre rutas es el texto del reintento (retryPrompt).
+   tests/suites/15-request-golden.js fija las peticiones exactas: si cambias un prompt a
+   propósito, esa suite falla y hay que actualizar sus huellas. */
 function buildFewShotNote(count){
   return count>0
     ?`\nNOTA: antes de la foto a analizar se incluyen ${count} imagen(es) de referencia, cada una con su conteo ya confirmado indicado por texto. Son solo contexto de calibración de escala/densidad — NO las cuentes. La imagen que debes contar es la ÚLTIMA imagen, la que aparece justo antes de este texto.\n`
@@ -1065,106 +1099,120 @@ overlap: true SOLO si hay pellets apilados o muy solapados que impiden contarlos
 size_match / size_detected: ${o.sizeCheckInstruction}`;
 }
 
-/* Diagnóstico para comparar rutas en Ajustes → 🔍 Ver último log: lo que se
-   envía realmente (ruta, tipo y tamaño de imagen, nº de ejemplos, largo del prompt). */
 /* Huella corta (djb2) de un texto: sirve para comprobar en el log que dos análisis recibieron EXACTAMENTE lo mismo. */
 function shortHash(str){ let h=5381; for(let i=0;i<str.length;i++) h=((h*33)^str.charCodeAt(i))>>>0; return h.toString(16).padStart(8,'0'); }
-function logAnalysisSend(route,mime,base64,fewShotCount,prompt,model,size){
-  const ex=size?getReferenceExamples().filter(e=>e.size===size).slice(-2).map(e=>e.total).join(','):'';
-  console.log(`ENVÍO IA [${route}] modelo=${model||PRODUCTION_MODEL}: ${mime}, imagen ${base64.length} car. (~${(base64.length*0.75/1048576).toFixed(2)} MB), few-shot ${fewShotCount}, prompt ${prompt.length} car., huella prompt=${shortHash(prompt)} imagen=${shortHash(base64)} ejemplos=[${ex}]`);
+/* Lo que se envía realmente (Ajustes → 🔍 Ver último log): ruta, modelo, imagen, ejemplos y huellas. */
+function logAnalysisSend(route,mime,base64,examples,prompt,model){
+  console.log(`ENVÍO IA [${route}] modelo=${model}: ${mime}, imagen ${base64.length} car. (~${(base64.length*0.75/1048576).toFixed(2)} MB), few-shot ${examples.length}, prompt ${prompt.length} car., huella prompt=${shortHash(prompt)} imagen=${shortHash(base64)} ejemplos=[${examples.map(e=>e.total).join(',')}]`);
 }
 
+/* Prompt del reintento (cuando la 1ª respuesta no trae un JSON utilizable). Se envía SIN ejemplos.
+   PENDIENTE (fase C, decisión ya tomada el 13/11/2026): dejar un único reintento, el de foto única
+   ({"total","confidence"} sobre "discos circulares"), también para multifoto — pedir menos cosas
+   aumenta la probabilidad de que el segundo intento salga bien. */
+function retryPrompt(route,single){
+  if(route==='multifoto') return `Cuenta los objetos circulares visibles en la imagen.\nResponde SOLO con este JSON sin ningún texto adicional:\n{"small":0,"medium":0,"large":0,"total":0,"confidence":"media","notes":null}\nSustituye los 0 de "medium" y "total" por el número real que cuentes (deben ser iguales) y "confidence" por "alta", "media" o "baja" según lo seguro que estés del conteo.`;
+  return single
+    ?`Cuenta cuántos discos circulares hay en esta imagen. Responde EXCLUSIVAMENTE con este JSON, sin ningún texto antes ni después: {"total": 0, "confidence": "media"}. Sustituye el 0 por el número real que cuentes y "confidence" por "alta", "media" o "baja" según lo seguro que estés del conteo ("media" o "baja" si hay discos solapados, amontonados o mal iluminados).`
+    :`Cuenta discos circulares y clasifícalos por tamaño relativo: pequeños en "small", medianos en "medium", grandes en "large". Responde EXCLUSIVAMENTE con este JSON, sin texto antes ni después: {"small":0,"medium":0,"large":0,"total":0,"confidence":"media"}. Sustituye los 0 por los números reales y "confidence" por "alta", "media" o "baja" según lo seguro que estés del conteo.`;
+}
+
+/* Primer objeto JSON utilizable de la respuesta, o null. Prueba de la primera "{" a la última "}"
+   (respuestas con texto antes o después) y, si eso no es JSON válido, el primer bloque "{…}".
+   null (respuesta cortada, sin JSON…) hace que analyzeImage reintente. */
+function parseJsonObject(text){
+  const start=text.indexOf('{'); if(start<0) return null;
+  const tryParse=str=>{ try{ const o=JSON.parse(str); return (o&&typeof o==='object'&&!Array.isArray(o))?o:null; }catch(e){ return null; } };
+  const end=text.lastIndexOf('}');
+  const whole=end>start?tryParse(text.slice(start,end+1)):null;
+  if(whole) return whole;
+  const m=text.slice(start).match(/\{[\s\S]*?\}/);
+  return m?tryParse(m[0]):null;
+}
+/* Conteo → entero ≥ 0 (el modelo podría devolver "26", 26.0, null…). */
+function toCount(v){ const n=Number(v); return Number.isFinite(n)&&n>0?Math.round(n):0; }
+const CONFIDENCE_LEVELS=['alta','media','baja'];
+
+/* Analiza UNA imagen. o = {route:'foto única'|'multifoto', apiKey, model, experimental, base64, mime,
+   productDesc, sizeMode:'single'|'multi', size, logSuffix?}.
+   Devuelve {total, small, medium, large, confidence (alta|media|baja|null), overlap, notes,
+   mismatchSize ('4'|'8'|'12'|null), viaRetry, firstStop, model, experimental, temp}.
+   Lanza Error si la API falla o si no hay JSON ni tras el reintento. No toca la interfaz. */
+async function analyzeImage(o){
+  const single=o.sizeMode==='single';
+  const tag=o.route==='multifoto'?'[multifoto] ':'';
+  const examples=single?selectFewShot(o.size):[];   /* en modo clasificar no hay tamaño único: sin ejemplos */
+  const sizeInstruction=single
+    ?`Todos los objetos son del mismo tamaño (${o.size}mm). Devuelve small=0, large=0 y pon el total en medium.`
+    :`Clasifica: pequeños (~4mm) en "small", medianos (~8mm) en "medium", grandes (~12mm) en "large".`;
+  /* Comprobación de tamaño declarado: solo en modo "un solo tamaño" (en clasificar no hay nada que contrastar). */
+  const sizeCheckInstruction=single
+    ?`Compara el tamaño visual de los discos con el tamaño declarado (${o.size}mm). Si no coincide, pon size_match=false e indica en size_detected el tamaño que parecen ("4mm", "8mm" o "12mm"). Solo pon size_match=false si estás razonablemente seguro; ante la duda pon size_match=true y size_detected=null.`
+    :`No aplica en modo clasificar: pon size_match=true y size_detected=null.`;
+  const prompt=buildCountPrompt({productDesc:o.productDesc,sizeInstruction,fewShotNote:buildFewShotNote(examples.length),sizeCheckInstruction});
+  logAnalysisSend(o.route,o.mime,o.base64,examples,prompt,o.model);
+
+  let stop=null;
+  const ask=async(promptText,withFewShot)=>{
+    console.log(`LLAMADA IA [${o.route} · ${withFewShot?'1ª llamada':'reintento'}] modelo=${o.model}${o.experimental?' 🧪 EXPERIMENTAL':''} ${samplingLabel(o.model)}`);
+    const data=await postCount(o.apiKey,o.model,[
+      ...(withFewShot?fewShotBlocks(examples):[]),
+      {type:'image',source:{type:'base64',media_type:o.mime,data:o.base64}},
+      {type:'text',text:promptText}
+    ]);
+    stop=data.stop_reason||null;
+    return responseText(data);
+  };
+
+  const firstRaw=await ask(prompt,true);
+  let r=parseJsonObject(firstRaw), viaRetry=false, firstStop=null;
+  if(!r){
+    /* Reintento único con un prompt más simple. Se registra por qué falló la 1ª (¿cortada por max_tokens?). */
+    viaRetry=true; firstStop=stop;
+    console.log(`${tag}1ª respuesta SIN JSON (stop_reason=${firstStop}, ${firstRaw.length} car.):`,JSON.stringify(firstRaw.slice(0,200)));
+    r=parseJsonObject(await ask(retryPrompt(o.route,single),false));
+    if(!r) throw new Error(o.route==='multifoto'
+      ?'La IA no devolvió JSON tras reintentar. Pulsa la foto de nuevo o elimínala y repite.'
+      :'La IA no devolvió JSON tras reintentar. Pulsa "Analizar de nuevo".');
+  }
+
+  const small=toCount(r.small), medium=toCount(r.medium), large=toCount(r.large);
+  const total=toCount(r.total)||(small+medium+large);
+  const confidence=CONFIDENCE_LEVELS.includes(r.confidence)?r.confidence:null;
+  if(!confidence) console.log(`${tag}Respuesta SIN confidence válida (reintento=${viaRetry?'sí':'no'}):`,JSON.stringify(r));
+  /* ¿El tamaño visual no coincide con el declarado? Solo se acepta si size_detected es un tamaño válido y distinto. */
+  let mismatchSize=null;
+  if(single&&r.size_match===false){
+    const det=String(r.size_detected||'').trim();
+    if(['4mm','8mm','12mm'].includes(det)&&det!==o.size+'mm') mismatchSize=det.replace('mm','');
+    else console.log(`${tag}size_match=false pero size_detected no utilizable:`,r.size_detected);
+  }
+  /* Los análisis del modo experimental no entran en el contador de confianza de producción. */
+  if(o.experimental) bumpExpCount();
+  else recordConfidenceOutcome(o.route==='multifoto'?'multi':'single',!confidence,viaRetry,single?o.size:'mix',firstStop);
+  console.log(`ANÁLISIS [${o.route}] modelo=${o.model} total=${total} confianza=${confidence||'n/d'} reintento=${viaRetry?'sí':'no'}${o.logSuffix||''}`);
+  const sampling=samplingFor(o.model);   /* tras la llamada: si el servidor rechazó temperature, ya no figura */
+  return {total,small,medium,large,confidence,overlap:r.overlap,notes:r.notes,mismatchSize,viaRetry,firstStop,
+    model:o.model,experimental:!!o.experimental,temp:('temperature' in sampling)?sampling.temperature:null};
+}
+
+/* Multifoto: analiza una foto del lote. La descripción del producto es la que se congeló al añadir
+   fotos (window._currentProductDesc: addMultiFoto / captura de cámara); el tamaño se lee del selector.
+   Multifoto siempre trabaja en modo "un solo tamaño". */
 async function analyzeOneFoto(entry) {
   const apiKey=getApiKey();
   if(!apiKey){entry.analyzing=false;entry.result={total:0,aiTotal:0,confidence:'baja',notes:'Sin API key',error:'Sin API key',failed:true};renderMultiList();updateMultiTotal();return;}
-  /* v7.9.5: verificado — esto ya leía el mismo #productDesc (con el
-     perfil 4/8/12mm cargado) que runCountAI(), no un texto genérico;
-     el refuerzo en PELLET_PROFILES contra "condensador cerámico" no
-     bastó (el usuario lo siguió viendo en pruebas reales). v7.9.6:
-     en vez de volver a leer el DOM aquí (que podría no reflejar el
-     perfil activo si cambia mientras este lote sigue resolviéndose
-     de forma asíncrona), se usa el snapshot congelado por
-     addMultiFoto() en window._currentProductDesc, idéntico para
-     todas las fotos de un mismo lote. */
-  const model=countModel();   /* v9.7: modelo fijado al empezar esta foto */
+  const {model,experimental}=currentModel();
   const productDesc=window._currentProductDesc||qs('#productDesc').value.trim()||PELLET_PROFILES['8'];
   const singleSize=qs('#singleSize').value;
-  const fewShotCount=getReferenceExamples().filter(e=>e.size===singleSize).slice(-2).length;
-  const fewShotNote=buildFewShotNote(fewShotCount);
-  /* v7.9.9 FIX REAL: el usuario aportó un A/B con datos reales —
-     la MISMA foto daba 52/52 exacto por foto única y 62/52 (+10) por
-     multifoto. Eso descarta que el problema fuera los pellets o el
-     perfil (serían los mismos en ambos casos) y apunta directamente
-     a que este prompt era simplemente menos riguroso que el de
-     runCountAI(): le faltaba la técnica de cuadrícula mental y las
-     REGLAS ABSOLUTAS, y encima afirmaba "esto es un grupo de 20-30"
-     de forma fija — falso y potencialmente sesgando el conteo al
-     probar con una foto que en realidad tenía más. Se alinea el
-     rigor con runCountAI() y se quita la afirmación de rango fijo.
-     (La sospecha del usuario de que la imagen se reenviaba
-     redimensionada a 400px en multifoto NO es cierta — ese resize
-     [EXAMPLE_MAX_DIM] solo se aplica al guardar un ejemplo few-shot,
-     nunca al envío para análisis; ambas rutas ya mandaban la imagen
-     en su resolución original. Verificado leyendo el código, no
-     solo con los console.log de abajo.) */
-  const sizeInstruction=`Todos los objetos son del mismo tamaño (${singleSize}mm). Devuelve small=0, large=0 y pon el total en medium.`;
-  const sizeCheckInstruction=`Compara el tamaño visual de los discos con el tamaño declarado (${singleSize}mm). Si no coincide, pon size_match=false e indica en size_detected el tamaño que parecen ("4mm", "8mm" o "12mm"). Solo pon size_match=false si estás razonablemente seguro; ante la duda pon size_match=true y size_detected=null.`;
-  const prompt=buildCountPrompt({productDesc,sizeInstruction,fewShotNote,sizeCheckInstruction});
-
-  console.log('MULTIFOTO PROMPT:', prompt.slice(0, 200));
-  console.log('MULTIFOTO IMAGE SIZE:', entry.base64.length);
-  logAnalysisSend('multifoto',entry.mime,entry.base64,fewShotCount,prompt,model,singleSize);
-
-  /* FIX CRÍTICO v7.9.4: mismo reintento con prompt ultra-simple que
-     runCountAI ya tenía para foto única — antes analyzeOneFoto solo
-     intentaba un regex de rescate y, si fallaba, daba error directo
-     sin reintentar con una segunda llamada a la API. */
-  let mStop=null;
-  async function askClaude(promptText, includeFewShot) {
-    console.log(`LLAMADA IA [multifoto · ${includeFewShot?'1ª llamada':'reintento'}] modelo=${model}${model!==PRODUCTION_MODEL?' 🧪 EXPERIMENTAL':''} ${samplingLabel(model)}`);
-    const fewShot=includeFewShot?buildFewShotBlocks(singleSize):[];
-    const data=await postCount(apiKey,model,[
-        ...fewShot,
-        {type:'image',source:{type:'base64',media_type:entry.mime,data:entry.base64}},
-        {type:'text',text:promptText}
-      ]);
-    mStop=data.stop_reason||null;
-    return responseText(data);
-  }
-  function extractJson(text){
-    if(text.startsWith('{'))return text;
-    const m=text.match(/\{[\s\S]*?\}/);
-    return m?m[0]:null;
-  }
-
   try {
-    const firstRaw=await askClaude(prompt,true);
-    let text=extractJson(firstRaw);
-    let mViaRetry=false, mFirstStop=null;
-    if(!text){
-      mViaRetry=true; mFirstStop=mStop;
-      console.log(`[multifoto] 1ª respuesta SIN JSON (stop_reason=${mFirstStop}, ${firstRaw.length} car.):`,JSON.stringify(firstRaw.slice(0,200)));
-      const simplePrompt=`Cuenta los objetos circulares visibles en la imagen.\nResponde SOLO con este JSON sin ningún texto adicional:\n{"small":0,"medium":0,"large":0,"total":0,"confidence":"media","notes":null}\nSustituye los 0 de "medium" y "total" por el número real que cuentes (deben ser iguales) y "confidence" por "alta", "media" o "baja" según lo seguro que estés del conteo.`;
-      text=extractJson(await askClaude(simplePrompt,false));
-      if(!text)throw new Error('La IA no devolvió JSON tras reintentar. Pulsa la foto de nuevo o elimínala y repite.');
-    }
-    const r=JSON.parse(text);
-    const total=r.total||r.medium||0;
-    /* v8.2: aviso de tamaño por foto. En multifoto solo se AVISA (no hay
-       "repetir con otro tamaño": mezclaría tamaños dentro de un mismo lote). */
-    let sizeWarn=null;
-    if(r.size_match===false){
-      const det=String(r.size_detected||'').trim();
-      if(['4mm','8mm','12mm'].includes(det)&&det!==singleSize+'mm')sizeWarn=det;
-    }
-    const validConf=['alta','media','baja'].includes(r.confidence);
-    if(!validConf)console.log('[multifoto] Respuesta SIN confidence válida (se muestra "media"):',JSON.stringify(r));
-    if(model===PRODUCTION_MODEL) recordConfidenceOutcome('multi',!validConf,mViaRetry,singleSize,mFirstStop);
-    else bumpExpCount();
-    entry.result={total,aiTotal:total,confidence:validConf?r.confidence:'media',notes:r.notes,sizeWarn,sizeDeclared:singleSize,model};
-    console.log(`ANÁLISIS [multifoto] modelo=${model} total=${total} confianza=${validConf?r.confidence:'n/d'} reintento=${mViaRetry?'sí':'no'}`);
+    const res=await analyzeImage({route:'multifoto',apiKey,model,experimental,base64:entry.base64,mime:entry.mime,productDesc,sizeMode:'single',size:singleSize});
+    /* En multifoto una confianza ausente se muestra como "media", y el tamaño distinto solo se AVISA
+       (no hay "repetir con otro tamaño": mezclaría tamaños dentro de un mismo lote). */
+    entry.result={total:res.total,aiTotal:res.total,confidence:res.confidence||'media',notes:res.notes,
+      sizeWarn:res.mismatchSize?res.mismatchSize+'mm':null,sizeDeclared:singleSize,model,experimental,viaRetry:res.viaRetry};
     const over=multiPhotoOverLimit(entry.result);
-    if(over)showToast(`⚠️ Una foto tiene ${total} uds: supera el máximo recomendado (${over.lim}) para ${over.size}mm`,true);
+    if(over)showToast(`⚠️ Una foto tiene ${res.total} uds: supera el máximo recomendado (${over.lim}) para ${over.size}mm`,true);
   } catch(err) {
     entry.result={total:0,aiTotal:0,confidence:'baja',notes:'Error: '+err.message,error:err.message,failed:true};
   } finally {
@@ -1231,7 +1279,8 @@ window.confirmMultiTotal = function() {
     date:new Date().toLocaleDateString('es-ES')+' '+new Date().toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'}),
     total:multiTotal,aiTotal:rawSum,size4:counts.c4,size8:counts.c8,size12:counts.c12,
     product:(qs('#productDesc').value||'').slice(0,60),confidence,
-    model:multifotos.some(f=>f.result&&f.result.model&&f.result.model!==PRODUCTION_MODEL)?EXPERIMENTAL_MODEL:PRODUCTION_MODEL,
+    model:((multifotos.find(f=>f.result&&f.result.experimental)||multifotos.find(f=>f.result&&f.result.model)||{}).result||{}).model||PRODUCTION_MODEL,
+    experimental:multifotos.some(f=>f.result&&f.result.experimental),
     notes:failedN>0?`⚠️ ${failedN} foto${failedN>1?'s':''} con error: contaron 0 (total incompleto)`:null,
     /* v7.9.8: {ai,total} por foto (no solo el total final) para poder
        mostrar en Historial qué fotos se corrigieron y cuánto, ej.
@@ -1697,7 +1746,12 @@ async function runCountAI() {
   if(!lastImageBase64||isAnalyzing)return;
   const apiKey=getApiKey();
   if(!apiKey){showToast('Introduce tu API key en ⚙️ Ajustes',true);switchTab('settings');return;}
-  const model=countModel();   /* v9.7: el modelo se fija al empezar: reintento y resultado usan el mismo aunque se cambie el interruptor a mitad */
+  const {model,experimental}=currentModel();   /* se fija al empezar: reintento y resultado usan el mismo aunque se cambie el interruptor a mitad */
+  /* La foto y sus datos se capturan AHORA: si se carga otra foto mientras la IA responde, este
+     análisis sigue siendo el de ESTA foto (antes el reintento podía enviar la foto nueva y la entrada
+     del historial recibía la miniatura/nitidez de la otra). */
+  const photo={base64:lastImageBase64,mime:lastImageMime,method:lastCaptureMethod,sharpness:lastSharpness,cam:lastCamMeta};
+  let stale=false;   /* true = se cargó otra foto durante el análisis */
   isAnalyzing=true;
   acquireWakeLock();
   flushPendingMismatch(); /* un aviso de tamaño sin resolver NO se pierde: se guarda marcado */
@@ -1713,76 +1767,21 @@ async function runCountAI() {
   const productDesc=qs('#productDesc').value.trim()||PELLET_PROFILES['8'];
   const sizeMode=qs('#sizeMode').value,singleSize=qs('#singleSize').value;
   const albaranQty=parseInt(qs('#albaranQty').value)||0;
-  const sizeInstruction=sizeMode==='single'
-    ?`Todos los objetos son del mismo tamaño (${singleSize}mm). Devuelve small=0, large=0 y pon el total en medium.`
-    :`Clasifica: pequeños (~4mm) en "small", medianos (~8mm) en "medium", grandes (~12mm) en "large".`;
-  /* v8.2: comprobación de tamaño declarado. Solo en modo "un solo tamaño":
-     en modo clasificar no hay tamaño declarado que contrastar. */
-  const sizeCheckInstruction=sizeMode==='single'
-    ?`Compara el tamaño visual de los discos con el tamaño declarado (${singleSize}mm). Si no coincide, pon size_match=false e indica en size_detected el tamaño que parecen ("4mm", "8mm" o "12mm"). Solo pon size_match=false si estás razonablemente seguro; ante la duda pon size_match=true y size_detected=null.`
-    :`No aplica en modo clasificar: pon size_match=true y size_detected=null.`;
-  const fewShotCount=sizeMode==='single'?getReferenceExamples().filter(e=>e.size===singleSize).slice(-2).length:0;
-  const fewShotNote=buildFewShotNote(fewShotCount);
-
-  const prompt=buildCountPrompt({productDesc,sizeInstruction,fewShotNote,sizeCheckInstruction});
-
-  console.log('SINGLE PROMPT:', prompt.slice(0, 200));
-  console.log('SINGLE IMAGE SIZE:', lastImageBase64.length);
-  logAnalysisSend('foto única',lastImageMime,lastImageBase64,fewShotCount,prompt,model,sizeMode==='single'?singleSize:'');
-
-  let lastStopReason=null;
-  async function askClaude(promptText, includeFewShot) {
-    console.log(`LLAMADA IA [foto única · ${includeFewShot?'1ª llamada':'reintento'}] modelo=${model}${model!==PRODUCTION_MODEL?' 🧪 EXPERIMENTAL':''} ${samplingLabel(model)}`);
-    const fewShot=(includeFewShot&&sizeMode==='single')?buildFewShotBlocks(singleSize):[];
-    const data=await postCount(apiKey,model,[
-        ...fewShot,
-        {type:'image',source:{type:'base64',media_type:lastImageMime,data:lastImageBase64}},
-        {type:'text',text:promptText}
-      ]);
-    lastStopReason=data.stop_reason||null;
-    return responseText(data);
-  }
-
-  function extractJson(text){
-    if(text.startsWith('{'))return text;
-    const m=text.match(/\{[\s\S]*?\}/);
-    return m?m[0]:null;
-  }
-
-  async function callClaude(prompt) {
-    const firstRaw=await askClaude(prompt,true);
-    let text=extractJson(firstRaw);
-    let viaRetry=false, firstStop=null;
-    if(!text){
-      viaRetry=true; firstStop=lastStopReason;
-      /* v9.1: se mide POR QUE la 1a respuesta no trae JSON (cortada por max_tokens=300? texto
-         antes del JSON?). Si fuera max_tokens, el reintento "simple" (sin cuadricula ni reglas)
-         estaria produciendo la mayoria de los conteos. */
-      console.log(`1ª respuesta SIN JSON (stop_reason=${firstStop}, ${firstRaw.length} car.):`,JSON.stringify(firstRaw.slice(0,200)));
-      /* FIX CRÍTICO: reintento único con prompt ultra-simple antes de rendirse */
-      /* v9.1: el reintento ahora tambien pide "confidence" (antes solo {"total":0}, y el 100% de los
-         "no disponible" salia de aqui). El "media" del JSON es un valor de plantilla, no una sugerencia. */
-      const simplePrompt=sizeMode==='single'
-        ?`Cuenta cuántos discos circulares hay en esta imagen. Responde EXCLUSIVAMENTE con este JSON, sin ningún texto antes ni después: {"total": 0, "confidence": "media"}. Sustituye el 0 por el número real que cuentes y "confidence" por "alta", "media" o "baja" según lo seguro que estés del conteo ("media" o "baja" si hay discos solapados, amontonados o mal iluminados).`
-        :`Cuenta discos circulares y clasifícalos por tamaño relativo: pequeños en "small", medianos en "medium", grandes en "large". Responde EXCLUSIVAMENTE con este JSON, sin texto antes ni después: {"small":0,"medium":0,"large":0,"total":0,"confidence":"media"}. Sustituye los 0 por los números reales y "confidence" por "alta", "media" o "baja" según lo seguro que estés del conteo.`;
-      text=extractJson(await askClaude(simplePrompt,false));
-      if(!text)throw new Error('La IA no devolvió JSON tras reintentar. Pulsa "Analizar de nuevo".');
-    }
-    const r=JSON.parse(text);
-    r.total=r.total||(r.small||0)+(r.medium||0)+(r.large||0);
-    r._viaRetry=viaRetry; r._firstStop=firstStop;
-    return r;
-  }
-
   try {
-    const result=await callClaude(prompt);
-    const total=result.total;
+    const res=await analyzeImage({route:'foto única',apiKey,model,experimental,base64:photo.base64,mime:photo.mime,
+      productDesc,sizeMode,size:singleSize,logSuffix:` método=${photo.method||'?'}`});
+    if(lastImageBase64!==photo.base64){
+      stale=true;
+      console.log('Resultado DESCARTADO: se cargó otra foto durante el análisis; se analiza la nueva.');
+      return;
+    }
+    const total=res.total;
     counts={c4:0,c8:0,c12:0,total};
     if(sizeMode==='single'){
       if(singleSize==='4')counts.c4=total;
       else if(singleSize==='12')counts.c12=total;
       else counts.c8=total;
-    } else {counts.c4=result.small||0;counts.c8=result.medium||0;counts.c12=result.large||0;}
+    } else {counts.c4=res.small;counts.c8=res.medium;counts.c12=res.large;}
 
     qs('#c4').textContent=sizeMode==='single'?(singleSize==='4'?total:'—'):counts.c4;
     qs('#c8').textContent=sizeMode==='single'?(singleSize==='8'?total:'—'):counts.c8;
@@ -1791,20 +1790,10 @@ async function runCountAI() {
 
     renderAlbaranStatus(total,albaranQty);
 
-    /* v8.3: "Confianza: undefined". El reintento con prompt ultra-simple
-       (cuando la 1ª respuesta no trae JSON) solo pide {"total":0} — sin
-       confidence — y esta ruta no tenía fallback (multifoto sí: ||'media').
-       Se normaliza: si no es alta/media/baja se trata como "no disponible",
-       se muestra así y se avisa de revisar la foto (no se aparenta "alta"). */
-    const confidence=['alta','media','baja'].includes(result.confidence)?result.confidence:null;
-    if(!confidence)console.log('Respuesta SIN confidence válida (¿vino del reintento simple?):',JSON.stringify(result));
-    /* v9.7: los análisis del modelo experimental NO entran en el contador de confianza de producción */
-    if(model===PRODUCTION_MODEL) recordConfidenceOutcome('single',!confidence,!!result._viaRetry,sizeMode==='single'?singleSize:'mix',result._firstStop);
-    else bumpExpCount();
-    console.log(`ANÁLISIS [foto única] modelo=${model} total=${total} confianza=${confidence||'n/d'} reintento=${result._viaRetry?'sí':'no'} método=${lastCaptureMethod||'?'}`);
+    const confidence=res.confidence;   /* alta | media | baja | null (= "no disponible": no se aparenta "alta") */
     const confLabel=confidence||'no disponible';
     const confColor=confidence==='alta'?'#3ecf8e':confidence==='baja'?'#f97316':'#f59e0b';
-    setStatus('statusCount',`✓ ${total} detectados · Confianza: ${confLabel}${result.notes?' · '+result.notes:''}${model!==PRODUCTION_MODEL?' · 🧪 '+modelLabel(model):''}`);
+    setStatus('statusCount',`✓ ${total} detectados · Confianza: ${confLabel}${res.notes?' · '+res.notes:''}${experimental?' · 🧪 '+modelLabel(model):''}`);
     qs('#statusCount').style.color=confColor;
 
     const confWarnEl=qs('#confWarning');
@@ -1819,7 +1808,7 @@ async function runCountAI() {
     /* v8.2: la alerta de solapamiento sale SOLO del campo booleano
        "overlap" del JSON (antes se buscaban palabras clave en las notas y
        una nota tipo "no hay solapamiento" disparaba un falso positivo). */
-    checkOverlapNotice(result.overlap);
+    checkOverlapNotice(res.overlap);
     /* v9.3: la alerta de densidad solo existía en multifoto; en el muestreo limpio los 3 outliers
        (8mm 54, 4mm 50, 12mm 38) estaban por encima del máximo recomendado y no avisó nada. */
     { const dw=qs('#densityWarning'), lim=sizeMode==='single'?MULTI_MAX_PER_PHOTO[singleSize]:null;
@@ -1833,28 +1822,22 @@ async function runCountAI() {
     drawOverlay(total,confidence);
     qs('#resultsCount').style.display='block';qs('#manualAdj').style.display='flex';qs('#btnSaveExample').style.display='flex';qs('#btnZones').style.display='';
 
-    /* v8.2: ¿el tamaño visual no coincide con el declarado? Solo se
-       acepta el aviso si size_detected es un tamaño válido y distinto. */
-    let mismatchSize=null;
-    if(sizeMode==='single'&&result.size_match===false){
-      const det=String(result.size_detected||'').trim();
-      if(['4mm','8mm','12mm'].includes(det)&&det!==singleSize+'mm')mismatchSize=det.replace('mm','');
-      else console.log('size_match=false pero size_detected no utilizable:',result.size_detected);
-    }
+    const mismatchSize=res.mismatchSize;   /* tamaño que parecen los discos si no coincide con el declarado, o null */
     const historyEntry={
       date:new Date().toLocaleDateString('es-ES')+' '+new Date().toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'}),
       total,aiTotal:total,size4:counts.c4,size8:counts.c8,size12:counts.c12,
       product:(qs('#productDesc').value||'').slice(0,60),
-      confidence,notes:result.notes,albaran:albaranQty||null
+      confidence,notes:res.notes,albaran:albaranQty||null
       // ODOO - pendiente de implementar: odoo:buildOdooText()
     };
     historyEntry.model=model;
-    historyEntry.temp=('temperature' in samplingFor(model))?PRODUCTION_TEMPERATURE:null;   /* v9.8: null = por defecto (anterior a v9.8 o modelo experimental) */
-    if(result._viaRetry)historyEntry.viaRetry=true;
-    if(lastCaptureMethod)historyEntry.captureMethod=lastCaptureMethod;
-    if(typeof lastSharpness==='number')historyEntry.sharpness=lastSharpness;
-    if(lastCaptureMethod==='camera'&&lastCamMeta)historyEntry.cam=lastCamMeta;
-    if(lastThumb&&sizeMode==='single')historyEntry._thumb=lastThumb;   /* se guarda en IndexedDB, no en localStorage */
+    historyEntry.experimental=experimental;
+    historyEntry.temp=res.temp;   /* temperature enviada; null = por defecto (anterior a v9.8, modelo sin temperature o rechazada) */
+    if(res.viaRetry)historyEntry.viaRetry=true;
+    if(photo.method)historyEntry.captureMethod=photo.method;
+    if(typeof photo.sharpness==='number')historyEntry.sharpness=photo.sharpness;
+    if(photo.method==='camera'&&photo.cam)historyEntry.cam=photo.cam;
+    if(lastThumb&&sizeMode==='single')historyEntry._thumb=lastThumb;   /* misma foto (comprobado arriba); se guarda en IndexedDB, no en localStorage */
     if(mismatchSize){
       /* NO se guarda todavía: espera a "Repetir con Xmm" (se descarta) o "Mantener". */
       lastVisionEntryId=null;
@@ -1865,10 +1848,12 @@ async function runCountAI() {
     }
     vibrateDone();
   } catch(err) {
-    setStatus('statusCount','✗ '+err.message,'#f97316');showToast(err.message,true);
+    if(lastImageBase64!==photo.base64) stale=true;   /* el error era de una foto que ya no está en pantalla */
+    else { setStatus('statusCount','✗ '+err.message,'#f97316');showToast(err.message,true); }
   } finally {
     isAnalyzing=false;qs('#btnRecount').disabled=false;qs('#analyzeSpinner').style.display='none';
     releaseWakeLock();
+    if(stale) runCountAI();   /* la foto nueva llegó mientras se analizaba la anterior: se analiza ahora */
   }
 }
 
@@ -2085,10 +2070,13 @@ function getReferenceExamples() {
   catch (err) { return []; }
 }
 
-function buildFewShotBlocks(size) {
-  if(!size) return [];
-  const recent=getReferenceExamples().filter(e=>e.size===size).slice(-2);
-  return recent.flatMap((ex,i)=>[
+/* Ejemplos que acompañan a un análisis: los FEWSHOT_SEND más recientes del mismo tamaño. */
+const FEWSHOT_SEND = 2;
+function selectFewShot(size) {
+  return size ? getReferenceExamples().filter(e=>e.size===size).slice(-FEWSHOT_SEND) : [];
+}
+function fewShotBlocks(examples) {
+  return examples.flatMap((ex,i)=>[
     {type:'text',text:`Ejemplo de referencia confirmado #${i+1}: esta foto contiene EXACTAMENTE ${ex.total} unidades de ${ex.size}mm. Úsala como referencia de escala y densidad visual para el conteo que viene a continuación.`},
     {type:'image',source:{type:'base64',media_type:ex.mime,data:ex.image}}
   ]);
@@ -2210,7 +2198,7 @@ window.saveAsExample = async function() {
        comparar después, foto por foto, con la visión clásica (Ajustes → 🧪). */
     const srcEntry = lastVisionEntryId ? loadHistory().find(e => e.id === lastVisionEntryId) : null;
     if (srcEntry && typeof srcEntry.aiTotal === 'number') {
-      if (!srcEntry.model || srcEntry.model === PRODUCTION_MODEL) entry.aiTotal = srcEntry.aiTotal;
+      if (!isExperimentalEntry(srcEntry)) entry.aiTotal = srcEntry.aiTotal;
       else entry.aiModel = srcEntry.model;   /* v9.7: no mezclar el conteo del modelo experimental con la comparación de producción */
     }
     if (await persistNewExample(entry, { replaceId: currentPhotoExampleId })) {
@@ -2243,7 +2231,7 @@ window.saveHistoryAsExample = async function(id) {
       size: sizes[0], confidence: e.confidence || null, product: (e.product || '').slice(0, 60)
     };
     if (typeof e.aiTotal === 'number') {
-      if (!e.model || e.model === PRODUCTION_MODEL) entry.aiTotal = e.aiTotal;
+      if (!isExperimentalEntry(e)) entry.aiTotal = e.aiTotal;
       else entry.aiModel = e.model;
     }
     if (await persistNewExample(entry)) { markHistoryExample(id, entry.id); renderHistory(); }
@@ -2828,7 +2816,7 @@ window.renderHistory=function(){
         ?`<span style="font-size:11px;font-weight:700;color:var(--green);border:1px solid var(--green);padding:2px 9px;border-radius:10px">📷 Cámara en vivo</span>`
         :`<span style="font-size:11px;font-weight:700;color:var(--muted);border:1px solid var(--muted);padding:2px 9px;border-radius:10px">📁 Archivo subido</span>`)
       :'';
-    const modelBadge=(e.model&&e.model!==PRODUCTION_MODEL)
+    const modelBadge=isExperimentalEntry(e)
       ?`<span style="font-size:11px;font-weight:700;color:#fff;background:#7c3aed;padding:2px 9px;border-radius:10px" title="Análisis hecho con el modelo EXPERIMENTAL; no cuenta en las métricas de producción">🧪 ${esc(modelLabel(e.model))}</span>`:'';
     const sharpHtml=(!isMulti&&!isWeigh&&typeof e.sharpness==='number')
       ?`<span title="Nitidez: varianza del Laplaciano a 480 px (más alto = más nítida)" style="font-size:11px;color:var(--hint)">🔍 nitidez ${Math.round(e.sharpness)}</span>`:'';
@@ -3001,7 +2989,7 @@ function statsHistoryEntries(opts){
   const out={'4':[],'8':[],'12':[]}; let excluded=0;
   loadHistory().forEach(e=>{
     if(e.aiTotal===undefined||e.method==='weigh')return;
-    if(!opts.includeExperimental&&e.model&&e.model!==PRODUCTION_MODEL)return;   /* v9.7: análisis del modelo experimental fuera de las métricas de producción */
+    if(!opts.includeExperimental&&isExperimentalEntry(e))return;   /* v9.7: análisis del modelo experimental fuera de las métricas de producción */
     const sizesUsed=[e.size4>0?'4':null,e.size8>0?'8':null,e.size12>0?'12':null].filter(Boolean);
     if(sizesUsed.length!==1)return;
     const isMulti=getMultiPhotoCount(e)>0;
@@ -3137,7 +3125,7 @@ window.toggleExperimentalModel=function(){
 };
 /* Análisis de FOTO ÚNICA hechos con el modelo experimental */
 function expEntries(){
-  return loadHistory().filter(e=>e.model===EXPERIMENTAL_MODEL&&e.aiTotal!==undefined&&e.method!=='weigh'&&!(getMultiPhotoCount(e)>0));
+  return loadHistory().filter(e=>isExperimentalEntry(e)&&e.model===EXPERIMENTAL_MODEL&&e.aiTotal!==undefined&&e.method!=='weigh'&&!(getMultiPhotoCount(e)>0));
 }
 function sizeOfEntry(e){ const s=[e.size4>0?'4':null,e.size8>0?'8':null,e.size12>0?'12':null].filter(Boolean); return s.length===1?s[0]:null; }
 function errSummary(list){   /* error = conteo de la IA − conteo verificado (positivo = cuenta de más) */
