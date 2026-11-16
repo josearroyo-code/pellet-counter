@@ -1,6 +1,5 @@
 /* ══════════════════════════════════════════
-   REFACTOR DEL PIPELINE DE ANÁLISIS (rama fable-audit, sobre v9.9; sin número de
-   versión propio hasta que se fusione)
+   Pellet Counter v9.10 — REFACTOR DEL PIPELINE DE ANÁLISIS (rama fable-audit, sobre v9.9)
    A  analyzeImage(): UNA función para foto única y multifoto (prompt, ejemplos
       few-shot, llamada, reintento, lectura del JSON, validaciones, contadores y
       logs). runCountAI() y analyzeOneFoto() conservan solo interfaz e historial.
@@ -546,7 +545,7 @@
    Fix: JSON parser robusto
    ══════════════════════════════════════════ */
 
-const VERSION = 'v9.9';
+const VERSION = 'v9.10';
 /* Límite de tokens de la respuesta en conteo (foto única, multifoto y reintento). 300 cortaba el 87% de las respuestas. */
 const COUNT_MAX_TOKENS = 600;
 /* Modelos de conteo. Todo lo que depende del modelo vive en esta tabla:
