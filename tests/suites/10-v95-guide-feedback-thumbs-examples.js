@@ -77,7 +77,7 @@ window.addEventListener('load', async () => {
 
     /* disparo manual: sin señal añadida, cierre inmediato */
     calls.feedback = 0; calls.beeps.length = 0;
-    openCameraModal('single'); await sleep(900); captureCameraPhoto();
+    openCameraModal('single'); for (let i = 0; i < 40 && !$('cameraVideo').videoWidth; i++) await sleep(150); /* espera a que la cámara esté lista en vez de un tiempo fijo */ captureCameraPhoto();
     ok('disparo manual: no usa el destello/pitido del automático y cierra al instante', calls.feedback === 0 && $('cameraModal').style.display === 'none');
     window.focusVerdict = realVerdict; window.shutterFeedback = realShutter; window.beep = realBeep;
     await sleep(600);
